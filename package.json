@@ -1,0 +1,54 @@
+{
+  "name": "@openclaw/advanced-voice",
+  "version": "1.0.0",
+  "description": "Advanced voice calling plugin for OpenClaw with System 1/2 architecture, security challenges, and full transcript logging",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "voice",
+    "voice-assistant",
+    "twilio",
+    "openai-realtime",
+    "security",
+    "ai",
+    "chatbot",
+    "telephony"
+  ],
+  "author": "Ramon Leon <ramon.leon@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gnaritas/openclaw-advanced-voice.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gnaritas/openclaw-advanced-voice/issues"
+  },
+  "homepage": "https://github.com/gnaritas/openclaw-advanced-voice#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "index.js",
+    "server.py",
+    "jarvis_integration.py",
+    "watchdog.py",
+    "openclaw.plugin.json",
+    "requirements.txt",
+    "prompts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "peerDependencies": {
+    "openclaw": ">=0.1.0"
+  },
+  "openclaw": {
+    "plugins": [
+      "./index.js"
+    ]
+  }
+}

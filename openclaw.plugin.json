@@ -1,0 +1,94 @@
+{
+  "id": "advanced-voice",
+  "name": "@openclaw/advanced-voice",
+  "version": "1.0.0",
+  "description": "Advanced voice system with System 1/2 architecture, your-secret-passphrase security, and full transcript logging",
+  "author": "Ramon Leon",
+  "license": "MIT",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "port": {
+        "type": "integer",
+        "default": 8001,
+        "minimum": 1024,
+        "maximum": 65535
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["twilio"]
+      },
+      "twilio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountSid": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          },
+          "fromNumber": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$"
+          }
+        }
+      },
+      "openai": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["challenge", "apiKey"],
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "Secret passphrase for inbound call authentication (no default - must be set)"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "Internal API key for voice server endpoints"
+          }
+        }
+      },
+      "logging": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "transcripts": {
+            "type": "boolean",
+            "default": true
+          },
+          "memoryPath": {
+            "type": "string",
+            "default": "~/clawd/memory"
+          }
+        }
+      },
+      "prompts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "inbound": {
+            "type": "string"
+          },
+          "outbound": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
