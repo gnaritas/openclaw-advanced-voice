@@ -19,7 +19,7 @@ from datetime import datetime
 # Gateway API config
 GATEWAY_URL = "http://127.0.0.1:18789/v1/chat/completions"
 GATEWAY_TOKEN = "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd"
-VOICE_API_KEY = "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd" # Shared secret for internal calls
+VOICE_API_KEY = os.getenv("VOICE_API_KEY", "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd")  # Shared secret for internal calls
 
 # Narrative bridge
 NARRATIVE_SCRIPT = os.path.expanduser("~/clawd/bin/narrative")
