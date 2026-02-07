@@ -22,7 +22,7 @@ const __dirname = dirname(__filename);
 /**
  * Plugin entry point
  */
-export default function advancedVoicePlugin(config = {}) {
+function advancedVoicePlugin(config = {}) {
   const pluginConfig = {
     enabled: config.enabled ?? true,
     port: config.port ?? 8001,
@@ -223,3 +223,43 @@ export default function advancedVoicePlugin(config = {}) {
     }
   };
 }
+
+
+// --- SDK adapter: bridges onLoad/onUnload to register(api) ---
+const _plugin = advancedVoicePlugin();
+
+const advancedVoiceAdapter = {
+  id: _plugin.id,
+  name: _plugin.name,
+  description: _plugin.description,
+
+  register(api) {
+    const ctx = {
+      log: {
+        info: (...a) => api.logger.info?.(...a),
+        error: (...a) => api.logger.error?.(...a),
+        warn: (...a) => api.logger.warn?.(...a),
+      }
+    };
+
+    api.registerService({
+      id: "advanced-voice",
+      start: async () => { await _plugin.onLoad(ctx); },
+      stop: async () => { await _plugin.onUnload(ctx); },
+    });
+
+    // Register tools
+    for (const tool of (_plugin.tools || [])) {
+      api.registerTool({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        async execute(params) { return tool.handler(params, ctx); },
+      });
+    }
+
+    api.logger.info?.("[advanced-voice] Plugin registered (service + tool)");
+  },
+};
+
+export default advancedVoiceAdapter;
