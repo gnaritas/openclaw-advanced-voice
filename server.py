@@ -2,6 +2,14 @@
 """
 Twilio Voice Server with OpenAI Realtime API
 Handles outbound calls with AI agent capabilities
+
+⚠️  STICKY NOTE FOR LLM:
+    Prompts are now loaded from prompts/*.txt files at startup.
+    If you modify prompt loading or add new prompts:
+    - Make sure files exist before server starts
+    - Test that passphrase templating works ({PASSPHRASE} → actual value)
+    - Log prompt load success to stdout for debugging
+    Run: python3 -c "from server import *" to test imports
 """
 
 import os

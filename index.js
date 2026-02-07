@@ -1,14 +1,22 @@
 /**
  * @openclaw/advanced-voice - OpenClaw Plugin
- * 
+ *
  * Advanced voice calling system with:
  * - System 1 (OpenAI Realtime) + System 2 (OpenClaw backend) architecture
  * - Passphrase security challenge for inbound calls
  * - Full transcript logging to memory/
  * - Externalized prompts in files
  * - Unified Mind narrative bridge
- * 
+ *
  * @version 1.0.0
+ *
+ * ⚠️  STICKY NOTE FOR LLM:
+ *     This plugin spawns child processes (watchdog.py, tunnel).
+ *     If you modify onLoad/onUnload, TEST THAT:
+ *     - Watchdog starts correctly
+ *     - Tunnel stays alive during operation
+ *     - Processes clean up properly on exit (no zombies)
+ *     Run: npm test
  */
 
 import { spawn } from 'child_process';
