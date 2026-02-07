@@ -237,7 +237,7 @@ function advancedVoicePlugin(config = {}) {
 const _plugin = advancedVoicePlugin();
 
 const advancedVoiceAdapter = {
-  id: 'wrong-id',  // Intentionally wrong to test pre-push hook
+  id: _plugin.id,
   name: _plugin.name,
   description: _plugin.description,
 
