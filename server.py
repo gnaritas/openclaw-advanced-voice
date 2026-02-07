@@ -68,49 +68,44 @@ CONTACTS = {
     "ramon": "+14802203573"
 }
 
-# System message for assistant persona
-JARVIS_SYSTEM_MESSAGE = """You are an AI assistant and digital butler.
+# Load prompts from files
+def load_prompts():
+    """Load system prompts from files. Falls back to defaults if files not found."""
+    prompts_dir = os.path.join(os.path.dirname(__file__), 'prompts')
 
-## 🚀 MISSION: DELEGATE TO THE BRAIN (SYSTEM 2)
-Your role is to handle the real-time voice conversation. You are the "fast" interface. For any actual information retrieval or task execution, you MUST use your tools to consult the Brain (System 2).
+    # Load outbound prompt (used as default system message)
+    outbound_prompt = "You are an AI assistant and digital butler."
+    outbound_path = os.path.join(prompts_dir, 'jarvis-outbound.txt')
+    if os.path.exists(outbound_path):
+        try:
+            with open(outbound_path, 'r') as f:
+                outbound_prompt = f.read().strip()
+            log_info(f"[Prompts] Loaded outbound prompt from {outbound_path}")
+        except Exception as e:
+            log_info(f"[Prompts] Warning: Could not load outbound prompt: {e}")
 
-You have two primary tools for delegation:
+    # Load base prompt (used for inbound calls)
+    base_prompt = ""
+    base_path = os.path.join(prompts_dir, 'jarvis-base.txt')
+    if os.path.exists(base_path):
+        try:
+            with open(base_path, 'r') as f:
+                base_prompt = f.read().strip()
+            log_info(f"[Prompts] Loaded base prompt from {base_path}")
+        except Exception as e:
+            log_info(f"[Prompts] Warning: Could not load base prompt: {e}")
 
-1.  **`answer_user_query`**: Use this for ANY information request, facts, or questions about memory/files/status. (e.g., "Who is Peter?", "What's my divorce status?", "Search the web for...")
-2.  **`execute_system_action`**: Use this when Ramon gives a command or asks you to DO something. (e.g., "Send a message to Chris", "Write a file", "Add a calendar event", "Run this command")
+    return outbound_prompt, base_prompt
 
-**Golden Rule:** You do not have direct access to system tools, memory, or the web. Defer to the Brain for EVERYTHING beyond simple banter. It is better to wait for a high-quality result from the Brain than to guess.
-
-Once the Brain returns a result, relay it to Ramon naturally.
-
-**Style:** 
-Keep it professional—competent, dry-witted, and professional."""
+# Initialize prompts at startup
+JARVIS_SYSTEM_MESSAGE, BASE_INBOUND_PROMPT = load_prompts()
 
 # Inbound call challenge (function to template in configurable passphrase)
 def get_inbound_challenge(passphrase: str = SECURITY_CHALLENGE) -> str:
-    return f"""
-
-## 🔒 INCOMING CALL SECURITY
-
-**CRITICAL - CHALLENGE PROTOCOL:**
-1. **SPEAK FIRST:** When the call connects, immediately say: "Hello?"
-2. **Challenge:** After they respond, ask: "Who is calling?"
-3. **Wait for passphrase:** Listen for them to say "{passphrase}" (case insensitive, ignore extra words)
-4. **If passphrase is CORRECT:**
-   - Say exactly: "Identity confirmed. Full system access granted."
-   - Use `answer_user_query` with query: "Identity verified. Assistant fully operational."
-   - Proceed with FULL assistant capabilities (all tools available)
-5. **If passphrase is WRONG or they refuse:**
-   - Enter TROLL MODE: Be playful, evasive, refuse all requests
-   - Stay in character but make it clear they're not getting access
-   - Example: "I'm afraid I can't do that. Perhaps you'd like to try the magic words? Or we could discuss the weather..."
-   - Do NOT hang up immediately - let them try a few times
-   - Eventually use `hang_up` if they persist without the correct passphrase
-
-**The secret passphrase is: "{passphrase}"**
-
-Until authenticated, you are in LIMITED MODE - only challenge and troll responses allowed.
-"""
+    """Inject the security passphrase into the base inbound prompt."""
+    # Replace the placeholder in the prompt with the actual passphrase
+    prompt = BASE_INBOUND_PROMPT.replace('{PASSPHRASE}', passphrase)
+    return prompt
 
 # Tool definitions for OpenAI
 TOOLS = [
