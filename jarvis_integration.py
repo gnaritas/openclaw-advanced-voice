@@ -244,6 +244,125 @@ async def execute_tool_via_jarvis(
         return {"success": False, "error": str(e)}
 
 
+async def report_mission_result(
+    call_sid: str,
+    success: bool,
+    outcome: str,
+    data: Dict[str, Any],
+    next_steps: str,
+    transcript: str
+) -> Dict[str, Any]:
+    """
+    Report mission result to the main session and store in memory.
+    
+    This function:
+    1. Writes a structured mission report to memory
+    2. Optionally notifies the main agent session
+    
+    Args:
+        call_sid: The Twilio call SID
+        success: Whether the mission succeeded
+        outcome: Brief description of what happened
+        data: Collected data from the call
+        next_steps: Recommended follow-up actions
+        transcript: Conversation transcript
+    
+    Returns:
+        Dict with report_id and status
+    """
+    timestamp = datetime.now().isoformat()
+    report_id = f"mission-{call_sid}-{datetime.now().strftime('%H%M%S')}"
+    
+    # Build the mission report
+    mission_report = f"""## 🎯 Mission Report - {timestamp}
+
+**Report ID:** {report_id}
+**Call SID:** {call_sid}
+**Status:** {"✅ SUCCESS" if success else "❌ FAILED"}
+
+### Outcome
+{outcome}
+
+### Collected Data
+```json
+{json.dumps(data, indent=2) if data else "No data collected"}
+```
+
+### Next Steps
+{next_steps if next_steps else "No follow-up actions specified"}
+
+### Transcript
+{transcript if transcript else "No transcript available"}
+
+---
+"""
+    
+    try:
+        # Write to memory
+        today = datetime.now().strftime("%Y-%m-%d")
+        memory_dir = os.path.expanduser("~/clawd/memory")
+        os.makedirs(memory_dir, exist_ok=True)
+        
+        # Write to daily memory file
+        memory_file = os.path.join(memory_dir, f"{today}.md")
+        file_exists = os.path.exists(memory_file)
+        
+        with open(memory_file, 'a') as f:
+            if not file_exists:
+                f.write(f"# Memory - {today}\n\n")
+            f.write(mission_report)
+        
+        # Also write to mission-results.md for easy tracking
+        missions_file = os.path.join(memory_dir, "mission-results.md")
+        with open(missions_file, 'a') as f:
+            f.write(mission_report)
+        
+        print(f"[Mission] Report written: {report_id}")
+        
+        # Notify main session via Gateway API (fire and forget)
+        try:
+            notification = f"📞 Mission call completed ({call_sid}):\n- Status: {'Success' if success else 'Failed'}\n- Outcome: {outcome}"
+            if data:
+                notification += f"\n- Data: {json.dumps(data)}"
+            if next_steps:
+                notification += f"\n- Next: {next_steps}"
+            
+            async with aiohttp.ClientSession() as session:
+                # Send as a low-priority notification to the main session
+                async with session.post(
+                    GATEWAY_URL,
+                    headers={
+                        "Authorization": f"Bearer {GATEWAY_TOKEN}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "openclaw:main",
+                        "messages": [{"role": "user", "content": f"[MISSION RESULT - DO NOT REPLY, JUST LOG]\n{notification}"}],
+                        "user": "agent:main:main"
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        print(f"[Mission] Notified main session")
+                    else:
+                        print(f"[Mission] Failed to notify main session: {response.status}")
+        except Exception as e:
+            print(f"[Mission] Notification failed (non-fatal): {e}")
+        
+        return {
+            "success": True,
+            "report_id": report_id,
+            "file": memory_file
+        }
+        
+    except Exception as e:
+        print(f"[Mission ERROR] Failed to write report: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 async def send_transcript_to_jarvis(transcript: Dict[str, Any], call_sid: str):
     """
     Write conversation transcript to memory files after call ends.

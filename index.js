@@ -131,7 +131,7 @@ function advancedVoicePlugin(config = {}) {
     tools: [
       {
         name: 'advanced_voice_call',
-        description: 'Initiate an advanced voice call with full System 2 integration',
+        description: 'Initiate an advanced voice call with full System 2 integration. Can operate in two modes: (1) Mission mode with role+mission for goal-oriented calls, or (2) Legacy mode with custom message prompt.',
         parameters: {
           type: 'object',
           properties: {
@@ -139,9 +139,18 @@ function advancedVoicePlugin(config = {}) {
               type: 'string',
               description: 'Phone number to call (E.164 format: +1234567890)'
             },
+            role: {
+              type: 'string',
+              description: 'Role/persona for the voice agent to adopt (e.g., "sales representative", "appointment scheduler"). Default: "personal assistant"',
+              default: 'personal assistant'
+            },
+            mission: {
+              type: 'string',
+              description: 'Specific mission objective for the call (e.g., "Schedule a demo for next Tuesday", "Confirm the appointment details"). When provided, enables mission mode with structured result reporting.'
+            },
             message: {
               type: 'string',
-              description: 'Optional custom prompt/instructions for the call'
+              description: 'Custom prompt/instructions for the call (legacy mode - use role+mission instead for new calls)'
             },
             mode: {
               type: 'string',
@@ -153,7 +162,20 @@ function advancedVoicePlugin(config = {}) {
           required: ['to']
         },
         async handler(params, ctx) {
-          const { to, message, mode = 'outbound' } = params;
+          const { to, role, mission, message, mode = 'outbound' } = params;
+
+          // Build request body
+          const body = {
+            agent_timezone: 'America/Los_Angeles'
+          };
+
+          // Mission mode takes precedence over legacy message mode
+          if (mission) {
+            body.mission = mission;
+            body.role = role || 'personal assistant';
+          } else if (message) {
+            body.message = message;
+          }
 
           // Call the voice server API
           const response = await fetch(`http://localhost:${pluginConfig.port}/call/number/${to}`, {
@@ -162,10 +184,7 @@ function advancedVoicePlugin(config = {}) {
               'Content-Type': 'application/json',
               'X-Voice-Key': pluginConfig.security.apiKey
             },
-            body: JSON.stringify({
-              message: message || '',
-              agent_timezone: 'America/Los_Angeles'
-            })
+            body: JSON.stringify(body)
           });
 
           if (!response.ok) {
@@ -179,7 +198,8 @@ function advancedVoicePlugin(config = {}) {
             callSid: result.call_sid,
             to: result.to,
             from: result.from,
-            status: result.status
+            status: result.status,
+            mode: mission ? 'mission' : 'legacy'
           };
         }
       }

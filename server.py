@@ -103,10 +103,41 @@ def load_prompts():
         except Exception as e:
             log_info(f"[Prompts] Warning: Could not load base prompt: {e}")
 
-    return outbound_prompt, base_prompt
+    # Load mission template (used for mission-based outbound calls)
+    mission_template = ""
+    mission_path = os.path.join(prompts_dir, 'mission-template.txt')
+    if os.path.exists(mission_path):
+        try:
+            with open(mission_path, 'r') as f:
+                mission_template = f.read().strip()
+            log_info(f"[Prompts] Loaded mission template from {mission_path}")
+        except Exception as e:
+            log_info(f"[Prompts] Warning: Could not load mission template: {e}")
+
+    return outbound_prompt, base_prompt, mission_template
 
 # Initialize prompts at startup
-JARVIS_SYSTEM_MESSAGE, BASE_INBOUND_PROMPT = load_prompts()
+JARVIS_SYSTEM_MESSAGE, BASE_INBOUND_PROMPT, MISSION_TEMPLATE = load_prompts()
+
+
+def construct_mission_prompt(role: str, mission: str) -> str:
+    """
+    Construct a mission-based system prompt from role and mission.
+    
+    Args:
+        role: The persona to adopt (e.g., "sales representative", "appointment scheduler")
+        mission: The specific objective (e.g., "Schedule a demo for next Tuesday")
+    
+    Returns:
+        Complete system prompt with role and mission embedded
+    """
+    if not MISSION_TEMPLATE:
+        # Fallback if template not loaded
+        return f"You are a {role}. Your mission: {mission}"
+    
+    prompt = MISSION_TEMPLATE.replace("{ROLE}", role).replace("{MISSION}", mission)
+    log_info(f"[Mission] Constructed prompt for role='{role}' (len: {len(prompt)})")
+    return prompt
 
 # Inbound call challenge (function to template in configurable passphrase)
 def get_inbound_challenge(passphrase: str = SECURITY_CHALLENGE) -> str:
@@ -155,6 +186,33 @@ TOOLS = [
                 }
             },
             "required": ["action"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "mission_result",
+        "description": "Report the outcome of your mission. Call this when the mission is complete, blocked, or cannot be completed. Always call before hanging up.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "success": {
+                    "type": "boolean",
+                    "description": "Whether the mission objective was achieved"
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "Brief description of what happened (1-2 sentences)"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "Any relevant data collected during the call (names, times, confirmations, etc.)"
+                },
+                "next_steps": {
+                    "type": "string",
+                    "description": "Recommended follow-up actions"
+                }
+            },
+            "required": ["success", "outcome"]
         }
     }
 ]
@@ -211,14 +269,35 @@ async def initiate_call_by_id(contact_id: str, request: Request, _auth: str = De
 
 @app.post("/call/number/{phone_number}")
 async def initiate_call_by_number(phone_number: str, request: Request, _auth: str = Depends(verify_api_key)):
-    """Initiate outbound call to a phone number"""
+    """Initiate outbound call to a phone number
+    
+    Body parameters:
+        message: Custom prompt (legacy mode)
+        role: Mission role to adopt (default: "personal assistant")
+        mission: Specific mission objective (triggers mission mode)
+        agent_timezone: Timezone for the call
+    
+    If 'mission' is provided, uses mission-based prompt construction.
+    Otherwise falls back to 'message' or default Jarvis prompt.
+    """
     data = await request.json()
     
     # Ensure + prefix for E.164 format
     if not phone_number.startswith("+"):
         phone_number = f"+{phone_number}"
     
-    message = data.get("message", JARVIS_SYSTEM_MESSAGE)
+    # Check for mission-based call
+    mission = data.get("mission")
+    role = data.get("role", "personal assistant")
+    
+    if mission:
+        # Mission mode: construct prompt from role + mission
+        message = construct_mission_prompt(role, mission)
+        log_info(f"[Call] Mission mode: role='{role}', mission='{mission[:50]}...'")
+    else:
+        # Legacy mode: use provided message or default
+        message = data.get("message", JARVIS_SYSTEM_MESSAGE)
+    
     agent_timezone = data.get("agent_timezone", "America/Los_Angeles")
     
     # Get public URL from environment or Host header
@@ -718,6 +797,74 @@ async def handle_tool_call(
         # Close the call after a brief pause
         await asyncio.sleep(1)
         await twilio_ws.close()
+        return
+    
+    # Special case: mission_result - report and optionally hang up
+    if name == "mission_result":
+        from jarvis_integration import report_mission_result
+        
+        success = arguments.get("success", False)
+        outcome = arguments.get("outcome", "No outcome provided")
+        data = arguments.get("data", {})
+        next_steps = arguments.get("next_steps", "")
+        
+        log_info(f"[Mission Result] success={success}, outcome={outcome}")
+        
+        # Build full transcript for the report
+        transcript_summary = []
+        for event in conversation_transcript:
+            if event.get("type") == "user_message":
+                transcript_summary.append(f"Them: {event.get('text', '')}")
+            elif event.get("type") == "assistant_message":
+                transcript_summary.append(f"Agent: {event.get('text', '')}")
+        
+        # Report to backend
+        try:
+            report_result = await report_mission_result(
+                call_sid=call_sid,
+                success=success,
+                outcome=outcome,
+                data=data,
+                next_steps=next_steps,
+                transcript="\n".join(transcript_summary)
+            )
+            result = {
+                "status": "reported",
+                "message": "Mission result recorded",
+                "report_id": report_result.get("report_id")
+            }
+        except Exception as e:
+            log_info(f"[Mission Result ERROR] Failed to report: {e}")
+            result = {
+                "status": "reported_locally",
+                "message": "Mission result recorded locally (backend unavailable)"
+            }
+        
+        # Send result to OpenAI
+        await openai_ws.send_json({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": json.dumps(result)
+            }
+        })
+        
+        # Log to transcript
+        conversation_transcript.append({
+            "type": "mission_result",
+            "timestamp": datetime.now().isoformat(),
+            "call_id": call_id,
+            "success": success,
+            "outcome": outcome,
+            "data": data,
+            "next_steps": next_steps
+        })
+        
+        # Trigger response so agent can wrap up
+        await openai_ws.send_json({
+            "type": "response.create"
+        })
         return
     
     # Special case: get_time can be handled locally for speed
