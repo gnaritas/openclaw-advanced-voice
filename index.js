@@ -76,9 +76,24 @@ function advancedVoicePlugin(config = {}) {
 
       // Start watchdog (which manages tunnel + server)
       ctx.log.info('[advanced-voice] Starting watchdog (tunnel + server manager)');
-      
+
+      // Pass plugin config as environment variables to watchdog/server
+      const childEnv = {
+        ...process.env,
+        PORT: String(pluginConfig.port),
+        TWILIO_ACCOUNT_SID: pluginConfig.twilio.accountSid || '',
+        TWILIO_AUTH_TOKEN: pluginConfig.twilio.authToken || '',
+        TWILIO_NUMBER: pluginConfig.twilio.fromNumber || '',
+        OPENAI_API_KEY: pluginConfig.openai.apiKey || '',
+        VOICE_API_KEY: pluginConfig.security.apiKey || '',
+        SECURITY_CHALLENGE: pluginConfig.security.challenge || '',
+        GATEWAY_URL: `http://127.0.0.1:18789/v1/chat/completions`,
+        GATEWAY_TOKEN: process.env.OPENCLAW_TOKEN || '',
+      };
+
       watchdogProcess = spawn('python3', ['-u', watchdogPath], {
         cwd: __dirname,
+        env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false  // Keep it attached to gateway lifecycle
       });
@@ -254,14 +269,16 @@ function advancedVoicePlugin(config = {}) {
 
 
 // --- SDK adapter: bridges onLoad/onUnload to register(api) ---
-const _plugin = advancedVoicePlugin();
-
 const advancedVoiceAdapter = {
-  id: _plugin.id,
-  name: _plugin.name,
-  description: _plugin.description,
+  id: 'advanced-voice',
+  name: '@openclaw/advanced-voice',
+  description: 'Advanced voice calling with System 1/2 architecture',
 
   register(api) {
+    // Get plugin config from OpenClaw (passed via api.config)
+    const pluginCfg = api.config || {};
+    const _plugin = advancedVoicePlugin(pluginCfg);
+
     const ctx = {
       log: {
         info: (...a) => api.logger.info?.(...a),

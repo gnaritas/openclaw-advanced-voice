@@ -16,6 +16,7 @@ Responsibilities:
 import os
 import re
 import sys
+import json
 import time
 import signal
 import subprocess
@@ -35,22 +36,41 @@ HEALTH_CHECK_INTERVAL = 30  # seconds
 TUNNEL_STARTUP_WAIT = 10
 MAX_CONSECUTIVE_FAILURES = 3
 
-# Twilio config (from environment variables)
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_NUMBER = os.getenv("TWILIO_NUMBER")
 
-# Server environment (pass through from parent process env)
+def _load_openclaw_config():
+    """Load advanced-voice config from OpenClaw's openclaw.json"""
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+        return data.get("plugins", {}).get("entries", {}).get("advanced-voice", {}).get("config", {})
+    except Exception:
+        return {}
+
+
+_oc_cfg = _load_openclaw_config()
+_twilio_cfg = _oc_cfg.get("twilio", {})
+_openai_cfg = _oc_cfg.get("openai", {})
+_security_cfg = _oc_cfg.get("security", {})
+
+# Twilio config (env vars first, then OpenClaw config fallback)
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") or _twilio_cfg.get("accountSid")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN") or _twilio_cfg.get("authToken")
+TWILIO_NUMBER = os.getenv("TWILIO_NUMBER") or _twilio_cfg.get("fromNumber")
+
+# Server environment (pass through from parent process env, with OpenClaw config fallback)
 SERVER_ENV = {
     "PORT": os.getenv("PORT", "8001"),
-    "TWILIO_ACCOUNT_SID": os.getenv("TWILIO_ACCOUNT_SID", ""),
-    "TWILIO_AUTH_TOKEN": os.getenv("TWILIO_AUTH_TOKEN", ""),
-    "TWILIO_NUMBER": os.getenv("TWILIO_NUMBER", ""),
-    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
-    "VOICE_API_KEY": os.getenv("VOICE_API_KEY", "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd"),
+    "TWILIO_ACCOUNT_SID": TWILIO_ACCOUNT_SID or "",
+    "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN or "",
+    "TWILIO_NUMBER": TWILIO_NUMBER or "",
+    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY") or _openai_cfg.get("apiKey", ""),
+    "VOICE_API_KEY": os.getenv("VOICE_API_KEY") or _security_cfg.get("apiKey", "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd"),
     "GATEWAY_URL": os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions"),
     "GATEWAY_TOKEN": os.getenv("GATEWAY_TOKEN", ""),
-    "SECURITY_CHALLENGE": os.getenv("SECURITY_CHALLENGE", "")  # Should be set in config
+    "SECURITY_CHALLENGE": os.getenv("SECURITY_CHALLENGE") or _security_cfg.get("challenge", ""),
 }
 
 # Process handles
