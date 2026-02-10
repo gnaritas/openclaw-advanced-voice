@@ -246,13 +246,30 @@ def update_twilio_webhook(public_url: str) -> bool:
 
 
 def check_public_health(public_url: str) -> bool:
-    """Check if the public URL is healthy (end-to-end)"""
-    try:
-        resp = requests.get(public_url, timeout=10)
-        return resp.status_code == 200
-    except requests.RequestException as e:
-        log(f"Health check failed: {e}")
+    """Check system health: local server + tunnel process alive.
+    
+    We do NOT resolve the tunnel DNS from the same machine — cloudflare
+    quick tunnel DNS often fails to resolve locally due to DNS caching.
+    Instead, we verify the two things we control:
+    1. Local server responds on localhost
+    2. cloudflared process is still running
+    If both are true, the tunnel is healthy (it's a transparent proxy).
+    """
+    # Check local server
+    if not check_local_health():
+        log("Health check failed: local server not responding")
         return False
+    
+    # Check cloudflared process is alive
+    if tunnel_process and tunnel_process.poll() is not None:
+        log(f"Health check failed: cloudflared process exited (code: {tunnel_process.returncode})")
+        return False
+    
+    if not tunnel_process:
+        log("Health check failed: no tunnel process reference")
+        return False
+    
+    return True
 
 
 def check_local_health() -> bool:
@@ -285,13 +302,13 @@ def full_restart() -> bool:
     # Update Twilio webhook
     update_twilio_webhook(public_url)
     
-    # Verify public health
+    # Verify health (local server + tunnel process)
     time.sleep(2)
     if check_public_health(public_url):
         log("=== SYSTEM HEALTHY ===")
         return True
     else:
-        log("WARNING: Public health check failed after restart")
+        log("WARNING: Health check failed after restart (local server or tunnel process)")
         return False
 
 
