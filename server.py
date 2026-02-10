@@ -218,7 +218,15 @@ TOOLS = [
 ]
 
 
-# (Removed CALL_INSTRUCTIONS - no longer using separate bouncer)
+# In-memory call result tracking (polling agents check this for mission outcomes)
+CALL_RESULTS: Dict[str, Dict[str, Any]] = {}
+
+def track_call(call_sid: str, status: str, **kwargs):
+    """Update call tracking status"""
+    if call_sid not in CALL_RESULTS:
+        CALL_RESULTS[call_sid] = {"started_at": datetime.now().isoformat()}
+    CALL_RESULTS[call_sid].update({"status": status, "updated_at": datetime.now().isoformat(), **kwargs})
+
 
 @app.get("/")
 async def root():
@@ -227,14 +235,19 @@ async def root():
 
 @app.post("/call/id/{contact_id}")
 async def initiate_call_by_id(contact_id: str, request: Request, _auth: str = Depends(verify_api_key)):
-    """Initiate outbound call to a contact by ID"""
+    """Initiate outbound call to a contact by ID (mission required)"""
     data = await request.json()
     
     if contact_id not in CONTACTS:
-        return {"error": f"Contact ID '{contact_id}' not found"}, 404
+        raise HTTPException(status_code=404, detail=f"Contact '{contact_id}' not found")
+    
+    mission = data.get("mission")
+    if not mission:
+        raise HTTPException(status_code=400, detail="mission is required for outbound calls")
     
     to_number = CONTACTS[contact_id]
-    message = data.get("message", JARVIS_SYSTEM_MESSAGE)
+    role = data.get("role", "personal assistant")
+    message = construct_mission_prompt(role, mission)
     agent_timezone = data.get("agent_timezone", "America/Los_Angeles")
     
     # Get public URL from environment or Host header
@@ -256,6 +269,8 @@ async def initiate_call_by_id(contact_id: str, request: Request, _auth: str = De
             status_callback_event=["initiated", "ringing", "answered", "completed"]
         )
         
+        track_call(call.sid, "initiated", to=to_number, mission=mission)
+        
         return {
             "success": True,
             "call_sid": call.sid,
@@ -264,21 +279,17 @@ async def initiate_call_by_id(contact_id: str, request: Request, _auth: str = De
             "status": call.status
         }
     except Exception as e:
-        return {"error": str(e)}, 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/call/number/{phone_number}")
 async def initiate_call_by_number(phone_number: str, request: Request, _auth: str = Depends(verify_api_key)):
-    """Initiate outbound call to a phone number
+    """Initiate outbound call to a phone number (mission required)
     
     Body parameters:
-        message: Custom prompt (legacy mode)
-        role: Mission role to adopt (default: "personal assistant")
-        mission: Specific mission objective (triggers mission mode)
+        mission: Specific mission objective (required)
+        role: Persona for the voice agent (default: "personal assistant")
         agent_timezone: Timezone for the call
-    
-    If 'mission' is provided, uses mission-based prompt construction.
-    Otherwise falls back to 'message' or default Jarvis prompt.
     """
     data = await request.json()
     
@@ -286,17 +297,13 @@ async def initiate_call_by_number(phone_number: str, request: Request, _auth: st
     if not phone_number.startswith("+"):
         phone_number = f"+{phone_number}"
     
-    # Check for mission-based call
     mission = data.get("mission")
-    role = data.get("role", "personal assistant")
+    if not mission:
+        raise HTTPException(status_code=400, detail="mission is required for outbound calls")
     
-    if mission:
-        # Mission mode: construct prompt from role + mission
-        message = construct_mission_prompt(role, mission)
-        log_info(f"[Call] Mission mode: role='{role}', mission='{mission[:50]}...'")
-    else:
-        # Legacy mode: use provided message or default
-        message = data.get("message", JARVIS_SYSTEM_MESSAGE)
+    role = data.get("role", "personal assistant")
+    message = construct_mission_prompt(role, mission)
+    log_info(f"[Call] Mission: role='{role}', mission='{mission[:50]}...'")
     
     agent_timezone = data.get("agent_timezone", "America/Los_Angeles")
     
@@ -319,6 +326,8 @@ async def initiate_call_by_number(phone_number: str, request: Request, _auth: st
             status_callback_event=["initiated", "ringing", "answered", "completed"]
         )
         
+        track_call(call.sid, "initiated", to=phone_number, mission=mission)
+        
         return {
             "success": True,
             "call_sid": call.sid,
@@ -327,7 +336,7 @@ async def initiate_call_by_number(phone_number: str, request: Request, _auth: st
             "status": call.status
         }
     except Exception as e:
-        return {"error": str(e)}, 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/incoming-call")
@@ -401,14 +410,32 @@ async def twiml(request: Request):
 
 @app.post("/call-status")
 async def call_status(request: Request):
-    """Handle call status callbacks"""
+    """Handle call status callbacks from Twilio"""
     form = await request.form()
     call_sid = form.get("CallSid")
     status = form.get("CallStatus")
     
     log_info(f"[Call Status] {call_sid}: {status}")
     
+    if call_sid:
+        if status in ("busy", "no-answer", "failed", "canceled"):
+            track_call(call_sid, "failed", reason=status)
+        elif status == "completed":
+            # Only update if no mission_result was already recorded
+            if call_sid in CALL_RESULTS and CALL_RESULTS[call_sid].get("status") != "completed":
+                track_call(call_sid, "ended_without_result")
+        else:
+            track_call(call_sid, status)
+    
     return {"status": "received"}
+
+
+@app.get("/call/{call_sid}/result")
+async def get_call_result(call_sid: str, _auth: str = Depends(verify_api_key)):
+    """Get mission result for a call (polled by the initiating agent)"""
+    if call_sid not in CALL_RESULTS:
+        return {"status": "unknown", "call_sid": call_sid}
+    return {**CALL_RESULTS[call_sid], "call_sid": call_sid}
 
 
 @app.websocket("/test-ws")
@@ -614,6 +641,10 @@ async def media_stream(websocket: WebSocket):
                                     "duration_seconds": (datetime.now() - call_start_time).total_seconds()
                                 })
                                 
+                                # Update call tracking if no mission result yet
+                                if call_sid and (call_sid not in CALL_RESULTS or CALL_RESULTS[call_sid].get("status") not in ("completed", "failed")):
+                                    track_call(call_sid, "ended_without_result")
+                                
                                 # Send full transcript to backend
                                 try:
                                     await send_transcript_to_jarvis(
@@ -776,6 +807,10 @@ async def handle_tool_call(
     if name == "hang_up":
         result = {"status": "hanging_up", "message": "Ending call"}
         
+        # Track hang-up (only if no mission_result already recorded)
+        if call_sid and (call_sid not in CALL_RESULTS or CALL_RESULTS[call_sid].get("status") != "completed"):
+            track_call(call_sid, "ended_without_result", reason="agent_hung_up")
+        
         # Send result to OpenAI
         await openai_ws.send_json({
             "type": "conversation.item.create",
@@ -809,6 +844,10 @@ async def handle_tool_call(
         next_steps = arguments.get("next_steps", "")
         
         log_info(f"[Mission Result] success={success}, outcome={outcome}")
+        
+        # Store result for polling agents
+        if call_sid:
+            track_call(call_sid, "completed", success=success, outcome=outcome, data=data, next_steps=next_steps)
         
         # Build full transcript for the report
         transcript_summary = []

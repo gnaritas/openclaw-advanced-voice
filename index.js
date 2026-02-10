@@ -142,11 +142,11 @@ function advancedVoicePlugin(config = {}) {
       }
     },
 
-    // Tool registration (optional - for agent to initiate calls)
+    // Tool registration — agent uses this to make outbound calls
     tools: [
       {
         name: 'advanced_voice_call',
-        description: 'Initiate an outbound voice call. Every call must have a mission — the specific reason for calling.',
+        description: 'Make an outbound voice call with a specific mission. Waits for the call to complete and returns the mission outcome.',
         parameters: {
           type: 'object',
           properties: {
@@ -162,48 +162,81 @@ function advancedVoicePlugin(config = {}) {
               type: 'string',
               description: 'Role/persona for the voice agent (default: "personal assistant")',
               default: 'personal assistant'
-            },
-            mode: {
-              type: 'string',
-              enum: ['outbound', 'notify'],
-              description: 'Call mode: outbound (conversation) or notify (one-way message)',
-              default: 'outbound'
             }
           },
           required: ['to', 'mission']
         },
         async handler(params, ctx) {
-          const { to, mission, role = 'personal assistant', mode = 'outbound' } = params;
+          const { to, mission, role = 'personal assistant' } = params;
 
-          // Build request body — mission is always present (required field)
-          const body = {
-            agent_timezone: 'America/Los_Angeles',
-            mission,
-            role
-          };
-
-          // Call the voice server API
+          // Initiate the call
           const response = await fetch(`http://localhost:${pluginConfig.port}/call/number/${to}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Voice-Key': pluginConfig.security.apiKey
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify({ mission, role, agent_timezone: 'America/Los_Angeles' })
           });
 
           if (!response.ok) {
             const error = await response.text();
-            throw new Error(`Voice call failed: ${error}`);
+            throw new Error(`Failed to initiate call: ${error}`);
           }
 
-          const result = await response.json();
+          const callInfo = await response.json();
+          const callSid = callInfo.call_sid;
+
+          // Poll for mission result — call may take minutes
+          const MAX_WAIT_MS = 5 * 60 * 1000; // 5 minutes
+          const POLL_MS = 5000;               // check every 5 seconds
+          const startTime = Date.now();
+
+          while (Date.now() - startTime < MAX_WAIT_MS) {
+            await new Promise(r => setTimeout(r, POLL_MS));
+
+            try {
+              const poll = await fetch(
+                `http://localhost:${pluginConfig.port}/call/${callSid}/result`,
+                { headers: { 'X-Voice-Key': pluginConfig.security.apiKey } }
+              );
+              if (poll.ok) {
+                const result = await poll.json();
+
+                if (result.status === 'completed') {
+                  return {
+                    success: result.success,
+                    callSid,
+                    to: callInfo.to,
+                    outcome: result.outcome,
+                    data: result.data || {},
+                    next_steps: result.next_steps || ''
+                  };
+                }
+
+                if (result.status === 'failed' || result.status === 'ended_without_result') {
+                  return {
+                    success: false,
+                    callSid,
+                    to: callInfo.to,
+                    outcome: result.reason || 'Call ended without mission result',
+                    data: {},
+                    next_steps: 'Retry or find alternative approach'
+                  };
+                }
+                // still in progress — keep polling
+              }
+            } catch (_) { /* poll error, keep trying */ }
+          }
+
+          // Timed out waiting
           return {
-            success: true,
-            callSid: result.call_sid,
-            to: result.to,
-            from: result.from,
-            status: result.status
+            success: false,
+            callSid,
+            to: callInfo.to,
+            outcome: 'Timed out waiting for call to complete (5 min)',
+            data: {},
+            next_steps: 'Check call logs'
           };
         }
       }

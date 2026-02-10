@@ -61,10 +61,9 @@ async def get_narrative_context() -> str:
 async def ask_brain(question: str, timeout: int = 45) -> Dict[str, Any]:
     """
     Ask System 2 (Clawdbot) a question via HTTP API.
-    Use a stable session ID to maintain context and prevent zombie sessions.
+    Omits `user` field so the gateway auto-creates an ephemeral session per request.
+    Each voice call gets its own isolated context — no cross-call bleed.
     """
-    sid = "agent:main:main"
-    
     # Wrap question with voice system context
     # NOTE: Keep this natural - brackets/caps trigger paranoia in backend
     wrapped_question = f"""Voice call in progress with Ramon.
@@ -83,8 +82,7 @@ Question from Ramon: {question}
                 },
                 json={
                     "model": "openclaw:main",
-                    "messages": [{"role": "user", "content": wrapped_question}],
-                    "user": sid
+                    "messages": [{"role": "user", "content": wrapped_question}]
                 },
                 timeout=aiohttp.ClientTimeout(total=timeout)
             ) as response:
