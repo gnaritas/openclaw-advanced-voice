@@ -935,7 +935,8 @@ async def handle_tool_call(
                 tool_name=effective_name,
                 arguments=normalized_args,
                 call_id=call_id,
-                session_context=session_context
+                session_context=session_context,
+                call_sid=call_sid
             )
             
             log_info(f"[Tool Exec] Got result from backend: {backend_result}")

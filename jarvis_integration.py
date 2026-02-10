@@ -58,11 +58,13 @@ async def get_narrative_context() -> str:
         return ""
 
 
-async def ask_brain(question: str, timeout: int = 45) -> Dict[str, Any]:
+async def ask_brain(question: str, call_sid: str = "", timeout: int = 45) -> Dict[str, Any]:
     """
     Ask System 2 (Clawdbot) a question via HTTP API.
-    Omits `user` field so the gateway auto-creates an ephemeral session per request.
-    Each voice call gets its own isolated context — no cross-call bleed.
+    
+    Uses call_sid as session key so all tool calls within one voice call
+    share the same backend session (context carries across tool calls).
+    Different calls get different sessions (no cross-call bleed).
     """
     # Wrap question with voice system context
     # NOTE: Keep this natural - brackets/caps trigger paranoia in backend
@@ -72,6 +74,16 @@ Question from Ramon: {question}
 
 (System 1 is handling the conversation - you're System 2 providing the answer. Respond directly to his question.)"""
     
+    # Session key: ties all tool calls in one voice call to one backend session
+    session_key = f"voice:{call_sid}" if call_sid else None
+    
+    payload = {
+        "model": "openclaw:main",
+        "messages": [{"role": "user", "content": wrapped_question}]
+    }
+    if session_key:
+        payload["user"] = session_key
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -80,16 +92,13 @@ Question from Ramon: {question}
                     "Authorization": f"Bearer {GATEWAY_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": "openclaw:main",
-                    "messages": [{"role": "user", "content": wrapped_question}]
-                },
+                json=payload,
                 timeout=aiohttp.ClientTimeout(total=timeout)
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     answer = data["choices"][0]["message"]["content"]
-                    print(f"[Brain] Success: {answer[:100]}...")
+                    print(f"[Brain] Success (session={session_key}): {answer[:100]}...")
                     return {"success": True, "result": {"answer": answer.strip()}}
                 else:
                     text = await response.text()
@@ -106,7 +115,8 @@ async def execute_tool_via_jarvis(
     tool_name: str,
     arguments: Dict[str, Any],
     call_id: str,
-    session_context: Optional[str] = None
+    session_context: Optional[str] = None,
+    call_sid: str = ""
 ) -> Dict[str, Any]:
     """
     Execute a tool by routing to the appropriate handler.
@@ -114,8 +124,9 @@ async def execute_tool_via_jarvis(
     Args:
         tool_name: Name of the tool
         arguments: Tool arguments
-        call_id: Unique call ID
+        call_id: OpenAI function call ID
         session_context: Optional context
+        call_sid: Twilio call SID (used as session key for brain queries)
         
     Returns:
         Tool result dict with success/error status
@@ -154,8 +165,8 @@ async def execute_tool_via_jarvis(
                 stdout, _ = await asyncio.wait_for(result.communicate(), timeout=5)
                 return {"success": True, "result": {"answer": f"The current time is {stdout.decode().strip()}."}}
             
-            # Route to brain (System 2)
-            return await ask_brain(question)
+            # Route to brain (System 2) — same session for the whole call
+            return await ask_brain(question, call_sid=call_sid)
 
         elif tool_name == "execute_command":
             command = arguments.get("command", "")
