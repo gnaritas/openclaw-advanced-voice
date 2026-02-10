@@ -221,6 +221,10 @@ TOOLS = [
 # In-memory call result tracking (polling agents check this for mission outcomes)
 CALL_RESULTS: Dict[str, Dict[str, Any]] = {}
 
+# Server-side mission prompt storage — keyed by call SID
+# The mission never leaves the server. Twilio only handles audio.
+CALL_MISSIONS: Dict[str, str] = {}
+
 def track_call(call_sid: str, status: str, **kwargs):
     """Update call tracking status"""
     if call_sid not in CALL_RESULTS:
@@ -264,10 +268,14 @@ async def initiate_call_by_id(contact_id: str, request: Request, _auth: str = De
         call = client.calls.create(
             to=to_number,
             from_=TWILIO_NUMBER,
-            url=f"{base_url}/twiml?message={base64.urlsafe_b64encode(message.encode()).decode()}&timezone={agent_timezone}",
+            url=f"{base_url}/twiml?timezone={agent_timezone}",
             status_callback=f"{base_url}/call-status",
             status_callback_event=["initiated", "ringing", "answered", "completed"]
         )
+        
+        # Store mission prompt server-side — Twilio never sees it
+        CALL_MISSIONS[call.sid] = message
+        log_info(f"[Call] Stored mission prompt for {call.sid} (len: {len(message)})")
         
         track_call(call.sid, "initiated", to=to_number, mission=mission)
         
@@ -321,10 +329,14 @@ async def initiate_call_by_number(phone_number: str, request: Request, _auth: st
         call = client.calls.create(
             to=phone_number,
             from_=TWILIO_NUMBER,
-            url=f"{base_url}/twiml?message={base64.urlsafe_b64encode(message.encode()).decode()}&timezone={agent_timezone}",
+            url=f"{base_url}/twiml?timezone={agent_timezone}",
             status_callback=f"{base_url}/call-status",
             status_callback_event=["initiated", "ringing", "answered", "completed"]
         )
+        
+        # Store mission prompt server-side — Twilio never sees it
+        CALL_MISSIONS[call.sid] = message
+        log_info(f"[Call] Stored mission prompt for {call.sid} (len: {len(message)})")
         
         track_call(call.sid, "initiated", to=phone_number, mission=mission)
         
@@ -381,28 +393,27 @@ async def incoming_call(request: Request):
 @app.get("/twiml")
 @app.post("/twiml")
 async def twiml(request: Request):
-    """Generate TwiML to connect call to WebSocket (outbound calls)"""
-    params = request.query_params
-    message_encoded = params.get("message", "")
-    timezone = params.get("timezone", "America/Los_Angeles")
+    """Generate TwiML to connect call to WebSocket (outbound calls).
     
-    # Decode message to log/inspect
-    try:
-        message = base64.urlsafe_b64decode(message_encoded.encode()).decode()
-    except:
-        message = message_encoded
+    Mission is NOT passed here — it's stored server-side keyed by call SID.
+    Twilio only handles audio routing, never sees mission content.
+    """
+    params = request.query_params
+    timezone = params.get("timezone", "America/Los_Angeles")
     
     # Get WebSocket URL - use the public-facing host
     host = request.headers.get("host", f"localhost:{PORT}")
-    
-    # Always use wss for cloudflare/ngrok/localtunnel tunnels
     protocol = "wss" if ("trycloudflare.com" in host or "ngrok" in host or "loca.lt" in host) else "ws"
-    ws_url = f"{protocol}://{host}/media-stream?message={message_encoded}&timezone={timezone}&call_direction=outbound"
-    log_info(f"[TwiML] Generated WebSocket URL: {ws_url}")
+    ws_url = f"{protocol}://{host}/media-stream"
+    
+    log_info(f"[TwiML] WebSocket URL: {ws_url} (timezone: {timezone})")
     
     response = VoiceResponse()
     connect = Connect()
-    connect.stream(url=ws_url)
+    stream = connect.stream(url=ws_url)
+    # Pass only non-sensitive metadata via customParameters
+    stream.parameter(name="call_direction", value="outbound")
+    stream.parameter(name="timezone", value=timezone)
     response.append(connect)
     
     return Response(content=str(response), media_type="application/xml")
@@ -463,51 +474,21 @@ async def media_stream(websocket: WebSocket):
         traceback.print_exc()
         return
     
-    # Get parameters
-    params = dict(websocket.query_params)
-    log_info(f"[WebSocket] Query params keys: {list(params.keys())}")
-    
-    call_sid_param = params.get("call_sid")
-    message_override = params.get("message", "")
-    timezone_default = params.get("timezone", "America/Los_Angeles")
-    
-    # Decode message override if present (outbound calls)
-    decoded_override = ""
-    if message_override:
-        try:
-            # Add padding if missing
-            padding = 4 - (len(message_override) % 4)
-            if padding < 4:
-                message_override += "=" * padding
-            decoded_override = base64.urlsafe_b64decode(message_override.encode()).decode()
-            log_info(f"[WebSocket] Decoded message override (len: {len(decoded_override)})")
-        except Exception as e:
-            log_info(f"[WebSocket ERROR] Failed to decode message override: {e}")
-            decoded_override = ""
-    
     # Pre-load narrative context (same for all calls)
     narrative_context = await get_narrative_context()
     
-    # Determine initial instructions
-    # Note: For inbound calls, we'll update instructions after parsing customParameters from Twilio start event
-    if decoded_override:
-        # Outbound call with custom instructions
-        base_instructions = decoded_override
-        if narrative_context:
-            final_instructions = f"{narrative_context}\n\n---\n\n{base_instructions}"
-        else:
-            final_instructions = base_instructions
-        log_info("[WebSocket] Using custom outbound instructions")
-        needs_inbound_update = False
+    # Default instructions — will be updated once we know the call SID (outbound)
+    # or once we detect inbound via customParameters in the Twilio start event
+    base_instructions = JARVIS_SYSTEM_MESSAGE
+    if narrative_context:
+        final_instructions = f"{narrative_context}\n\n---\n\n{base_instructions}"
     else:
-        # Default to standard assistant - will be updated if inbound
-        base_instructions = JARVIS_SYSTEM_MESSAGE
-        if narrative_context:
-            final_instructions = f"{narrative_context}\n\n---\n\n{base_instructions}"
-        else:
-            final_instructions = base_instructions
-        log_info("[WebSocket] Using default assistant (will update if inbound)")
-        needs_inbound_update = True  # Flag to check customParameters
+        final_instructions = base_instructions
+    log_info("[WebSocket] Default instructions loaded (will update on start event)")
+    
+    # Flags for deferred setup
+    needs_mission_lookup = True  # Will check CALL_MISSIONS on start event
+    timezone_default = "America/Los_Angeles"
     
     # Conversation tracking
     conversation_transcript: List[Dict[str, Any]] = []
@@ -579,8 +560,27 @@ async def media_stream(websocket: WebSocket):
                                 
                                 log_info(f"[Twilio] Stream started: {stream_sid} (call: {call_sid}, direction: {call_direction})")
                                 
-                                # Update session if inbound call detected
-                                if needs_inbound_update and call_direction == "inbound":
+                                if call_direction == "outbound" and needs_mission_lookup:
+                                    # Look up mission from server-side storage (never went through Twilio)
+                                    mission_prompt = CALL_MISSIONS.pop(call_sid, None)
+                                    if mission_prompt:
+                                        log_info(f"[Mission] Found stored prompt for {call_sid} (len: {len(mission_prompt)})")
+                                        if narrative_context:
+                                            outbound_instructions = f"{narrative_context}\n\n---\n\n{mission_prompt}"
+                                        else:
+                                            outbound_instructions = mission_prompt
+                                        
+                                        await openai_ws.send_json({
+                                            "type": "session.update",
+                                            "session": {
+                                                "instructions": outbound_instructions
+                                            }
+                                        })
+                                        log_info("[Mission] ✓ Session updated with mission prompt")
+                                    else:
+                                        log_info(f"[Mission] WARNING: No stored prompt for {call_sid} — using default")
+                                
+                                elif call_direction == "inbound":
                                     log_info("[WebSocket] Inbound call detected - updating session with challenge")
                                     inbound_instructions = JARVIS_SYSTEM_MESSAGE + get_inbound_challenge()
                                     if narrative_context:
