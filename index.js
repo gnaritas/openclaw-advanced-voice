@@ -316,12 +316,13 @@ const advancedVoiceAdapter = {
     });
 
     // Register tools
+    // NOTE: OpenClaw execute signature is (toolCallId, params) — not just (params)
     for (const tool of (_plugin.tools || [])) {
       api.registerTool({
         name: tool.name,
         description: tool.description,
         parameters: tool.parameters,
-        async execute(params) { return tool.handler(params, ctx); },
+        async execute(_toolCallId, params) { return tool.handler(params, ctx); },
       });
     }
 
