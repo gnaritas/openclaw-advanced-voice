@@ -322,7 +322,11 @@ const advancedVoiceAdapter = {
         name: tool.name,
         description: tool.description,
         parameters: tool.parameters,
-        async execute(_toolCallId, params) { return tool.handler(params, ctx); },
+        async execute(_toolCallId, params) {
+          const result = await tool.handler(params, ctx);
+          // OpenClaw expects tool results as strings
+          return typeof result === 'string' ? result : JSON.stringify(result);
+        },
       });
     }
 
