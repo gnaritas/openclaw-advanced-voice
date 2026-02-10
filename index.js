@@ -88,7 +88,7 @@ function advancedVoicePlugin(config = {}) {
         VOICE_API_KEY: pluginConfig.security.apiKey || '',
         SECURITY_CHALLENGE: pluginConfig.security.challenge || '',
         GATEWAY_URL: `http://127.0.0.1:18789/v1/chat/completions`,
-        GATEWAY_TOKEN: process.env.OPENCLAW_TOKEN || '',
+        GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_TOKEN || '',
       };
 
       watchdogProcess = spawn('python3', ['-u', watchdogPath], {

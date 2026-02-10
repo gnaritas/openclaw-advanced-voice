@@ -69,7 +69,7 @@ SERVER_ENV = {
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY") or _openai_cfg.get("apiKey", ""),
     "VOICE_API_KEY": os.getenv("VOICE_API_KEY") or _security_cfg.get("apiKey", ""),
     "GATEWAY_URL": os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions"),
-    "GATEWAY_TOKEN": os.getenv("GATEWAY_TOKEN", ""),
+    "GATEWAY_TOKEN": os.getenv("GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_TOKEN", ""),
     "SECURITY_CHALLENGE": os.getenv("SECURITY_CHALLENGE") or _security_cfg.get("challenge", ""),
 }
 
