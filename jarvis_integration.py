@@ -16,10 +16,10 @@ import aiohttp
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-# Gateway API config
-GATEWAY_URL = "http://127.0.0.1:18789/v1/chat/completions"
-GATEWAY_TOKEN = "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd"
-VOICE_API_KEY = os.getenv("VOICE_API_KEY", "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd")  # Shared secret for internal calls
+# Gateway API config (all secrets from environment — never hardcode)
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions")
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
+VOICE_API_KEY = os.getenv("VOICE_API_KEY", "")
 
 # Narrative bridge
 NARRATIVE_SCRIPT = os.path.expanduser("~/clawd/bin/narrative")

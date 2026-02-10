@@ -67,7 +67,7 @@ SERVER_ENV = {
     "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN or "",
     "TWILIO_NUMBER": TWILIO_NUMBER or "",
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY") or _openai_cfg.get("apiKey", ""),
-    "VOICE_API_KEY": os.getenv("VOICE_API_KEY") or _security_cfg.get("apiKey", "7e9917e5896de5d66fbdf8d418dd4a61b76cc8c4cf593dfd"),
+    "VOICE_API_KEY": os.getenv("VOICE_API_KEY") or _security_cfg.get("apiKey", ""),
     "GATEWAY_URL": os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions"),
     "GATEWAY_TOKEN": os.getenv("GATEWAY_TOKEN", ""),
     "SECURITY_CHALLENGE": os.getenv("SECURITY_CHALLENGE") or _security_cfg.get("challenge", ""),
