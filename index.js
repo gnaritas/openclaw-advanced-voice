@@ -214,7 +214,7 @@ function advancedVoicePlugin(config = {}) {
                   };
                 }
 
-                if (result.status === 'failed' || result.status === 'ended_without_result') {
+                if (result.status === 'failed' || result.status === 'ended_without_result' || result.status === 'unknown') {
                   return {
                     success: false,
                     callSid,
