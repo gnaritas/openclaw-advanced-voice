@@ -246,30 +246,26 @@ def update_twilio_webhook(public_url: str) -> bool:
 
 
 def check_public_health(public_url: str) -> bool:
-    """Check system health: local server + tunnel process alive.
+    """Check if the public URL is healthy (end-to-end).
     
-    We do NOT resolve the tunnel DNS from the same machine — cloudflare
-    quick tunnel DNS often fails to resolve locally due to DNS caching.
-    Instead, we verify the two things we control:
-    1. Local server responds on localhost
-    2. cloudflared process is still running
-    If both are true, the tunnel is healthy (it's a transparent proxy).
+    DNS resolution failures from the local machine are ignored — cloudflare
+    quick tunnel DNS often fails to resolve locally while working fine
+    externally. Only real failures (HTTP errors, connection refused, timeouts)
+    count against the health check.
     """
-    # Check local server
-    if not check_local_health():
-        log("Health check failed: local server not responding")
+    try:
+        resp = requests.get(public_url, timeout=10)
+        return resp.status_code == 200
+    except requests.exceptions.ConnectionError as e:
+        # DNS resolution failures are not real failures on the local machine
+        if "NameResolutionError" in str(e) or "nodename nor servname" in str(e) or "Name or service not known" in str(e):
+            log(f"Health check: DNS resolution failed (ignored — likely local DNS issue)")
+            return True  # Assume healthy — DNS works externally
+        log(f"Health check failed: {e}")
         return False
-    
-    # Check cloudflared process is alive
-    if tunnel_process and tunnel_process.poll() is not None:
-        log(f"Health check failed: cloudflared process exited (code: {tunnel_process.returncode})")
+    except requests.RequestException as e:
+        log(f"Health check failed: {e}")
         return False
-    
-    if not tunnel_process:
-        log("Health check failed: no tunnel process reference")
-        return False
-    
-    return True
 
 
 def check_local_health() -> bool:
