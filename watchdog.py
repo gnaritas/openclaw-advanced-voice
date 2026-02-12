@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-Advanced Voice Watchdog - Monitors tunnel and voice server
+Advanced Voice Watchdog - Monitors permanent endpoint + voice server.
 
-Based on the original voice-server watchdog.py but adapted for the
-OpenClaw advanced-voice plugin architecture.
+This watchdog does NOT create quick tunnels. It uses a fixed, permanent
+public URL and verifies end-to-end health through that endpoint.
 
 Responsibilities:
-1. Start/restart cloudflared tunnel on port 8001
-2. Parse the dynamic tunnel URL from output
-3. Update Twilio webhook configuration
-4. Start/restart voice server with PUBLIC_URL
-5. Monitor public endpoint for end-to-end health
+1. Start/restart voice server with permanent PUBLIC_URL
+2. Update Twilio webhook configuration
+3. Monitor permanent public endpoint for end-to-end health
 """
 
 import os
-import re
 import sys
 import json
 import time
@@ -23,17 +20,14 @@ import subprocess
 import requests
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
 
 # Configuration
-LOCAL_PORT = 8001
+LOCAL_PORT = int(os.getenv("PORT", "8001"))
 LOCAL_URL = f"http://localhost:{LOCAL_PORT}"
 PLUGIN_DIR = Path(__file__).parent
-TUNNEL_LOG = PLUGIN_DIR / "tunnel.log"
 SERVER_LOG = PLUGIN_DIR / "server.log"
 WATCHDOG_LOG = PLUGIN_DIR / "watchdog.log"
 HEALTH_CHECK_INTERVAL = 30  # seconds
-TUNNEL_STARTUP_WAIT = 10
 MAX_CONSECUTIVE_FAILURES = 3
 
 
@@ -60,6 +54,14 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") or _twilio_cfg.get("account
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN") or _twilio_cfg.get("authToken")
 TWILIO_NUMBER = os.getenv("TWILIO_NUMBER") or _twilio_cfg.get("fromNumber")
 
+# Permanent public URL (no quick tunnels)
+PUBLIC_URL = (
+    os.getenv("VOICE_PUBLIC_URL")
+    or os.getenv("PUBLIC_URL")
+    or _oc_cfg.get("publicUrl")
+    or "https://ramon-voice.lifeley.tech"
+).rstrip("/")
+
 # Server environment (pass through from parent process env, with OpenClaw config fallback)
 SERVER_ENV = {
     "PORT": os.getenv("PORT", "8001"),
@@ -74,9 +76,8 @@ SERVER_ENV = {
 }
 
 # Process handles
-tunnel_process = None
 server_process = None
-current_public_url = None
+current_public_url = PUBLIC_URL
 
 
 def log(msg: str):
@@ -89,74 +90,6 @@ def log(msg: str):
     # Also log to file
     with open(WATCHDOG_LOG, 'a') as f:
         f.write(message)
-
-
-def parse_tunnel_url(log_path: Path, timeout: int = TUNNEL_STARTUP_WAIT) -> Optional[str]:
-    """Parse cloudflare tunnel URL from log output"""
-    start = time.time()
-    url_pattern = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
-    
-    while time.time() - start < timeout:
-        if log_path.exists():
-            content = log_path.read_text()
-            match = url_pattern.search(content)
-            if match:
-                return match.group(0)
-        time.sleep(1)
-    
-    return None
-
-
-def start_tunnel() -> Optional[str]:
-    """Start cloudflared tunnel and return the public URL"""
-    global tunnel_process
-    
-    # Kill any existing tunnel
-    stop_tunnel()
-    
-    # Clear old log
-    if TUNNEL_LOG.exists():
-        TUNNEL_LOG.unlink()
-    
-    log("Starting cloudflared tunnel...")
-    
-    # Start tunnel with output to log file
-    with open(TUNNEL_LOG, 'w') as log_file:
-        tunnel_process = subprocess.Popen(
-            ["cloudflared", "tunnel", "--url", LOCAL_URL],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
-    
-    log(f"Tunnel process started (PID: {tunnel_process.pid})")
-    
-    # Wait for and parse the URL
-    url = parse_tunnel_url(TUNNEL_LOG, timeout=TUNNEL_STARTUP_WAIT)
-    
-    if url:
-        log(f"Tunnel URL: {url}")
-        return url
-    else:
-        log("ERROR: Failed to get tunnel URL from cloudflared output")
-        return None
-
-
-def stop_tunnel():
-    """Stop the cloudflared tunnel"""
-    global tunnel_process
-    
-    if tunnel_process:
-        log(f"Stopping tunnel (PID: {tunnel_process.pid})")
-        try:
-            tunnel_process.terminate()
-            tunnel_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            tunnel_process.kill()
-        tunnel_process = None
-    
-    # Kill any orphaned cloudflared processes
-    subprocess.run(["pkill", "-f", "cloudflared tunnel"], capture_output=True)
 
 
 def start_server(public_url: str):
@@ -246,21 +179,15 @@ def update_twilio_webhook(public_url: str) -> bool:
 
 
 def check_public_health(public_url: str) -> bool:
-    """Check if the public URL is healthy (end-to-end).
-    
-    DNS resolution failures from the local machine are ignored — cloudflare
-    quick tunnel DNS often fails to resolve locally while working fine
-    externally. Only real failures (HTTP errors, connection refused, timeouts)
-    count against the health check.
-    """
+    """Check if the permanent public URL is healthy (end-to-end)."""
     try:
         resp = requests.get(public_url, timeout=10)
         return resp.status_code == 200
     except requests.exceptions.ConnectionError as e:
-        # DNS resolution failures are not real failures on the local machine
+        # Keep this guard because local DNS can fail while endpoint is externally healthy.
         if "NameResolutionError" in str(e) or "nodename nor servname" in str(e) or "Name or service not known" in str(e):
             log(f"Health check: DNS resolution failed (ignored — likely local DNS issue)")
-            return True  # Assume healthy — DNS works externally
+            return True
         log(f"Health check failed: {e}")
         return False
     except requests.RequestException as e:
@@ -278,17 +205,11 @@ def check_local_health() -> bool:
 
 
 def full_restart() -> bool:
-    """Full restart: tunnel + server + Twilio config"""
+    """Full restart: server + Twilio config (permanent URL)."""
     global current_public_url
     
     log("=== FULL RESTART ===")
-    
-    # Start tunnel and get URL
-    public_url = start_tunnel()
-    if not public_url:
-        log("Failed to start tunnel")
-        return False
-    
+    public_url = PUBLIC_URL
     current_public_url = public_url
     
     # Start server with the URL
@@ -298,13 +219,13 @@ def full_restart() -> bool:
     # Update Twilio webhook
     update_twilio_webhook(public_url)
     
-    # Verify health (local server + tunnel process)
+    # Verify health via permanent public endpoint
     time.sleep(2)
     if check_public_health(public_url):
         log("=== SYSTEM HEALTHY ===")
         return True
     else:
-        log("WARNING: Health check failed after restart (local server or tunnel process)")
+        log("WARNING: Health check failed after restart")
         return False
 
 
@@ -312,7 +233,6 @@ def signal_handler(signum, frame):
     """Handle shutdown gracefully"""
     log("Received shutdown signal")
     stop_server()
-    stop_tunnel()
     sys.exit(0)
 
 
@@ -323,6 +243,7 @@ def main():
     log("Advanced Voice Watchdog Starting")
     log("=" * 60)
     log(f"Local URL: {LOCAL_URL}")
+    log(f"Permanent PUBLIC_URL: {PUBLIC_URL}")
     log(f"Health check interval: {HEALTH_CHECK_INTERVAL}s")
     log(f"Twilio number: {TWILIO_NUMBER}")
     
@@ -355,14 +276,11 @@ def main():
                 full_restart()
                 consecutive_failures = 0
             elif consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                log("Max failures reached - restarting tunnel")
-                # Just restart the tunnel, server is fine
-                public_url = start_tunnel()
-                if public_url:
-                    current_public_url = public_url
-                    update_twilio_webhook(public_url)
-                    # Restart server with new PUBLIC_URL
-                    start_server(public_url)
+                log("Max failures reached - restarting server and reasserting webhook")
+                public_url = PUBLIC_URL
+                current_public_url = public_url
+                update_twilio_webhook(public_url)
+                start_server(public_url)
                 consecutive_failures = 0
 
 

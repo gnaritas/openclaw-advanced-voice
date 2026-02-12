@@ -34,6 +34,7 @@ function advancedVoicePlugin(config = {}) {
   const pluginConfig = {
     enabled: config.enabled ?? true,
     port: config.port ?? 8001,
+    publicUrl: config.publicUrl ?? process.env.VOICE_PUBLIC_URL ?? process.env.PUBLIC_URL ?? 'https://ramon-voice.lifeley.tech',
     provider: config.provider ?? 'twilio',
     twilio: config.twilio ?? {},
     openai: config.openai ?? {},
@@ -81,6 +82,7 @@ function advancedVoicePlugin(config = {}) {
       const childEnv = {
         ...process.env,
         PORT: String(pluginConfig.port),
+        VOICE_PUBLIC_URL: pluginConfig.publicUrl,
         TWILIO_ACCOUNT_SID: pluginConfig.twilio.accountSid || '',
         TWILIO_AUTH_TOKEN: pluginConfig.twilio.authToken || '',
         TWILIO_NUMBER: pluginConfig.twilio.fromNumber || '',
@@ -248,6 +250,7 @@ function advancedVoicePlugin(config = {}) {
       properties: {
         enabled: { type: 'boolean', default: true },
         port: { type: 'number', default: 8001 },
+        publicUrl: { type: 'string', default: 'https://ramon-voice.lifeley.tech' },
         provider: { type: 'string', enum: ['twilio'], default: 'twilio' },
         twilio: {
           type: 'object',
