@@ -22,7 +22,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Configuration
-LOCAL_PORT = int(os.getenv("PORT", "8001"))
+LOCAL_PORT = int(os.getenv("PORT", "8000"))
 LOCAL_URL = f"http://localhost:{LOCAL_PORT}"
 PLUGIN_DIR = Path(__file__).parent
 SERVER_LOG = PLUGIN_DIR / "server.log"
@@ -64,7 +64,7 @@ PUBLIC_URL = (
 
 # Server environment (pass through from parent process env, with OpenClaw config fallback)
 SERVER_ENV = {
-    "PORT": os.getenv("PORT", "8001"),
+    "PORT": os.getenv("PORT", "8000"),
     "TWILIO_ACCOUNT_SID": TWILIO_ACCOUNT_SID or "",
     "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN or "",
     "TWILIO_NUMBER": TWILIO_NUMBER or "",

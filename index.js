@@ -33,7 +33,7 @@ const __dirname = dirname(__filename);
 function advancedVoicePlugin(config = {}) {
   const pluginConfig = {
     enabled: config.enabled ?? true,
-    port: config.port ?? 8001,
+    port: config.port ?? 8000,
     publicUrl: config.publicUrl ?? process.env.VOICE_PUBLIC_URL ?? process.env.PUBLIC_URL ?? 'https://ramon-voice.lifeley.tech',
     provider: config.provider ?? 'twilio',
     twilio: config.twilio ?? {},
@@ -249,7 +249,7 @@ function advancedVoicePlugin(config = {}) {
       type: 'object',
       properties: {
         enabled: { type: 'boolean', default: true },
-        port: { type: 'number', default: 8001 },
+        port: { type: 'number', default: 8000 },
         publicUrl: { type: 'string', default: 'https://ramon-voice.lifeley.tech' },
         provider: { type: 'string', enum: ['twilio'], default: 'twilio' },
         twilio: {
