@@ -48,6 +48,13 @@ _oc_cfg = _load_openclaw_config()
 _twilio_cfg = _oc_cfg.get("twilio", {})
 _openai_cfg = _oc_cfg.get("openai", {})
 _security_cfg = _oc_cfg.get("security", {})
+_allowed_callers = _security_cfg.get("allowedCallerNumbers", [])
+if isinstance(_allowed_callers, str):
+    _allowed_callers_csv = _allowed_callers
+elif isinstance(_allowed_callers, list):
+    _allowed_callers_csv = ",".join(str(x).strip() for x in _allowed_callers if str(x).strip())
+else:
+    _allowed_callers_csv = ""
 
 # Twilio config (env vars first, then OpenClaw config fallback)
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") or _twilio_cfg.get("accountSid")
@@ -73,6 +80,7 @@ SERVER_ENV = {
     "GATEWAY_URL": os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions"),
     "GATEWAY_TOKEN": os.getenv("GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_TOKEN", ""),
     "SECURITY_CHALLENGE": os.getenv("SECURITY_CHALLENGE") or _security_cfg.get("challenge", ""),
+    "ALLOWED_CALLER_NUMBERS": os.getenv("ALLOWED_CALLER_NUMBERS", _allowed_callers_csv),
 }
 
 # Process handles
