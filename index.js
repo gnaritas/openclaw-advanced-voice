@@ -31,23 +31,25 @@ const __dirname = dirname(__filename);
  * Plugin entry point
  */
 function advancedVoicePlugin(config = {}) {
+  // Some OpenClaw builds pass plugin config directly, others wrap it under config.config.
+  const resolvedConfig = config?.config ?? config;
   const pluginConfig = {
-    enabled: config.enabled ?? true,
-    port: config.port ?? 8000,
-    publicUrl: config.publicUrl ?? process.env.VOICE_PUBLIC_URL ?? process.env.PUBLIC_URL ?? 'https://ramon-voice.lifeley.tech',
-    provider: config.provider ?? 'twilio',
-    twilio: config.twilio ?? {},
-    openai: config.openai ?? {},
-    security: config.security ?? {
-      challenge: config.security?.challenge || process.env.SECURITY_CHALLENGE,
-      apiKey: config.apiKey || process.env.VOICE_API_KEY,
-      allowedCallerNumbers: config.security?.allowedCallerNumbers || []
+    enabled: resolvedConfig.enabled ?? true,
+    port: resolvedConfig.port ?? 8000,
+    publicUrl: resolvedConfig.publicUrl ?? process.env.VOICE_PUBLIC_URL ?? process.env.PUBLIC_URL ?? 'https://ramon-voice.lifeley.tech',
+    provider: resolvedConfig.provider ?? 'twilio',
+    twilio: resolvedConfig.twilio ?? {},
+    openai: resolvedConfig.openai ?? {},
+    security: resolvedConfig.security ?? {
+      challenge: resolvedConfig.security?.challenge || process.env.SECURITY_CHALLENGE,
+      apiKey: resolvedConfig.apiKey || process.env.VOICE_API_KEY,
+      allowedCallerNumbers: resolvedConfig.security?.allowedCallerNumbers || []
     },
-    logging: config.logging ?? {
+    logging: resolvedConfig.logging ?? {
       transcripts: true,
       memoryPath: '~/clawd/memory'
     },
-    prompts: config.prompts ?? {
+    prompts: resolvedConfig.prompts ?? {
       inbound: join(__dirname, 'prompts/jarvis-base.txt'),
       outbound: join(__dirname, 'prompts/jarvis-outbound.txt')
     }
