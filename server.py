@@ -559,6 +559,7 @@ async def media_stream(websocket: WebSocket):
     call_sid = None
     timezone = timezone_default  # Initialize with default, updated from Twilio start event
     current_call_direction = "outbound"
+    inbound_auth_flow_active = False
     inbound_authenticated = False
     inbound_passphrase_verified = False
     
@@ -607,7 +608,7 @@ async def media_stream(websocket: WebSocket):
                 async def forward_twilio_to_openai():
                     """Forward audio from Twilio to OpenAI"""
                     nonlocal stream_sid, call_sid, timezone, current_call_direction
-                    nonlocal inbound_authenticated, inbound_passphrase_verified
+                    nonlocal inbound_auth_flow_active, inbound_authenticated, inbound_passphrase_verified
                     try:
                         async for message in websocket.iter_text():
                             data = json.loads(message)
@@ -625,6 +626,7 @@ async def media_stream(websocket: WebSocket):
                                 log_info(f"[Twilio] Stream started: {stream_sid} (call: {call_sid}, direction: {call_direction})")
                                 
                                 if call_direction == "outbound" and needs_mission_lookup:
+                                    inbound_auth_flow_active = False
                                     # Look up mission from server-side storage (never went through Twilio)
                                     mission_prompt = CALL_MISSIONS.pop(call_sid, None)
                                     if mission_prompt:
@@ -650,6 +652,7 @@ async def media_stream(websocket: WebSocket):
                                         break
                                 
                                 elif call_direction == "inbound":
+                                    inbound_auth_flow_active = True
                                     inbound_authenticated = False
                                     inbound_passphrase_verified = False
                                     log_info("[WebSocket] Inbound call detected - updating session with challenge")
@@ -738,7 +741,7 @@ async def media_stream(websocket: WebSocket):
                 async def forward_openai_to_twilio():
                     """Forward responses from OpenAI to Twilio"""
                     nonlocal timezone, current_call_direction
-                    nonlocal inbound_authenticated, inbound_passphrase_verified
+                    nonlocal inbound_auth_flow_active, inbound_authenticated, inbound_passphrase_verified
                     try:
                         active_response_id = None
                         
@@ -793,9 +796,16 @@ async def media_stream(websocket: WebSocket):
                                         # Backend-controlled inbound auth:
                                         # caller is already number-allowlisted in /incoming-call.
                                         # passphrase remains required to unlock assistant mode.
-                                        if current_call_direction == "inbound" and not inbound_authenticated:
+                                        if inbound_auth_flow_active and not inbound_authenticated:
                                             if not inbound_passphrase_verified:
-                                                if inbound_passphrase_matches(transcript_text):
+                                                matched = inbound_passphrase_matches(transcript_text)
+                                                log_info(
+                                                    f"[Security] Auth check: matched={matched}, "
+                                                    f"inbound_flow={inbound_auth_flow_active}, "
+                                                    f"direction={current_call_direction}, "
+                                                    f"normalized='{_normalize_phrase(transcript_text)}'"
+                                                )
+                                                if matched:
                                                     inbound_passphrase_verified = True
                                                     inbound_authenticated = True
                                                     log_info("[Security] Inbound passphrase matched by backend; enabling assistant mode")
