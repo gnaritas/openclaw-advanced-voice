@@ -40,7 +40,8 @@ function advancedVoicePlugin(config = {}) {
     openai: config.openai ?? {},
     security: config.security ?? {
       challenge: config.security?.challenge || process.env.SECURITY_CHALLENGE,
-      apiKey: config.apiKey || process.env.VOICE_API_KEY
+      apiKey: config.apiKey || process.env.VOICE_API_KEY,
+      allowedCallerNumbers: config.security?.allowedCallerNumbers || []
     },
     logging: config.logging ?? {
       transcripts: true,
@@ -89,6 +90,9 @@ function advancedVoicePlugin(config = {}) {
         OPENAI_API_KEY: pluginConfig.openai.apiKey || '',
         VOICE_API_KEY: pluginConfig.security.apiKey || '',
         SECURITY_CHALLENGE: pluginConfig.security.challenge || '',
+        ALLOWED_CALLER_NUMBERS: Array.isArray(pluginConfig.security.allowedCallerNumbers)
+          ? pluginConfig.security.allowedCallerNumbers.join(',')
+          : '',
         GATEWAY_URL: `http://127.0.0.1:18789/v1/chat/completions`,
         GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_TOKEN || '',
       };
@@ -270,13 +274,19 @@ function advancedVoicePlugin(config = {}) {
         },
         security: {
           type: 'object',
-          required: ['challenge', 'apiKey'],
+          required: ['challenge', 'apiKey', 'allowedCallerNumbers'],
           properties: {
             challenge: { 
               type: 'string',
               description: 'Secret passphrase for inbound call authentication (required - no default)'
             },
-            apiKey: { type: 'string' }
+            apiKey: { type: 'string' },
+            allowedCallerNumbers: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string' },
+              description: 'First factor allowlist: only these caller numbers can access inbound auth flow'
+            }
           }
         },
         logging: {

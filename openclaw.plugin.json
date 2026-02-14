@@ -51,7 +51,7 @@
       "security": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["challenge", "apiKey"],
+        "required": ["challenge", "apiKey", "allowedCallerNumbers"],
         "properties": {
           "challenge": {
             "type": "string",
@@ -60,6 +60,14 @@
           "apiKey": {
             "type": "string",
             "description": "Internal API key for voice server endpoints"
+          },
+          "allowedCallerNumbers": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "First-factor allowlist: only these inbound caller numbers are accepted"
           }
         }
       },
