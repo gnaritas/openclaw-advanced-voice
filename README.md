@@ -43,6 +43,10 @@
 ~/.openclaw/extensions/advanced-voice/
 ```
 
+### Deployment
+- See `DEPLOYMENT.md` for the production deploy runbook (Linux -> Mac `clawd`).
+- Canonical flow: push to GitHub, then pull on `mac` and restart gateway.
+
 ### 2. Configure in `openclaw.json`
 Add to `plugins.entries`:
 
