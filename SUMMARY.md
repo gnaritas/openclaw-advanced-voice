@@ -16,8 +16,8 @@
 - ✅ `requirements.txt` — Python dependencies
 
 ### Prompt Files
-- ✅ `prompts/jarvis-base.txt` — Inbound call behavior (troll + transformation)
-- ✅ `prompts/jarvis-outbound.txt` — Outbound call behavior (friendly assistant)
+- ✅ `prompts/inbound.txt` — Inbound call behavior
+- ✅ `prompts/outbound.txt` — Outbound mission call behavior
 
 ### Documentation
 - ✅ `README.md` — Full plugin documentation
@@ -47,8 +47,8 @@
 
 ### 4. Externalized Prompts ✅
 - Edit behavior without code changes
-- `prompts/jarvis-base.txt` — Inbound (troll + assistant)
-- `prompts/jarvis-outbound.txt` — Outbound (friendly)
+- `prompts/inbound.txt` — Inbound behavior
+- `prompts/outbound.txt` — Outbound mission behavior
 - Restart Gateway to apply
 
 ### 5. Unified Mind Narrative Bridge ✅
@@ -68,8 +68,8 @@
 ├── package.json                # NPM package definition
 ├── requirements.txt            # Python dependencies
 ├── prompts/
-│   ├── jarvis-base.txt         # Inbound call prompt
-│   └── jarvis-outbound.txt     # Outbound call prompt
+│   ├── inbound.txt             # Inbound call prompt
+│   └── outbound.txt            # Outbound mission prompt
 ├── README.md                   # Full documentation
 ├── INSTALL.md                  # Installation guide
 ├── CONFIG-SCHEMA.md            # Config reference
@@ -221,7 +221,7 @@ Initiates advanced voice call with full System 2 integration.
 
 ### Edit Prompts
 ```bash
-vim ~/.openclaw/extensions/advanced-voice/prompts/jarvis-base.txt
+vim ~/.openclaw/extensions/advanced-voice/prompts/inbound.txt
 openclaw gateway restart
 ```
 

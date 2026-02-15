@@ -22,8 +22,8 @@
 - The assistant remembers past calls via memory system
 
 ### 📂 Externalized Prompts
-- `prompts/jarvis-base.txt` — Inbound call behavior (troll + transformation)
-- `prompts/jarvis-outbound.txt` — Outbound call behavior (friendly assistant)
+- `prompts/inbound.txt` — Inbound call behavior
+- `prompts/outbound.txt` — Outbound mission behavior
 - Edit prompts without touching code
 - Restart voice server to apply changes
 
@@ -401,7 +401,7 @@ You can run built-in `voice-call` and `advanced-voice` simultaneously:
 ### Edit Prompts
 ```bash
 # Edit behavior
-vim ~/.openclaw/extensions/advanced-voice/prompts/jarvis-base.txt
+vim ~/.openclaw/extensions/advanced-voice/prompts/inbound.txt
 
 # Restart to apply
 openclaw gateway restart

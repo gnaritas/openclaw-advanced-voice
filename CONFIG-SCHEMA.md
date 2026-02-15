@@ -30,8 +30,8 @@ Add to `plugins.entries`:
             "memoryPath": "~/clawd/memory"
           },
           "prompts": {
-            "inbound": "~/.openclaw/extensions/advanced-voice/prompts/jarvis-base.txt",
-            "outbound": "~/.openclaw/extensions/advanced-voice/prompts/jarvis-outbound.txt"
+            "inbound": "~/.openclaw/extensions/advanced-voice/prompts/inbound.txt",
+            "outbound": "~/.openclaw/extensions/advanced-voice/prompts/outbound.txt"
           }
         }
       }
@@ -208,8 +208,8 @@ export TWILIO_AUTH_TOKEN="your_token"
             "memoryPath": "~/clawd/memory"
           },
           "prompts": {
-            "inbound": "~/.openclaw/extensions/advanced-voice/prompts/jarvis-base.txt",
-            "outbound": "~/.openclaw/extensions/advanced-voice/prompts/jarvis-outbound.txt"
+            "inbound": "~/.openclaw/extensions/advanced-voice/prompts/inbound.txt",
+            "outbound": "~/.openclaw/extensions/advanced-voice/prompts/outbound.txt"
           }
         }
       }

@@ -2,7 +2,7 @@
   "id": "advanced-voice",
   "name": "@openclaw/advanced-voice",
   "version": "1.0.0",
-  "description": "Advanced voice system with System 1/2 architecture, your-secret-passphrase security, and full transcript logging",
+  "description": "Advanced voice system with System 1/2 architecture, caller allowlist security, and full transcript logging",
   "author": "Ramon Leon",
   "license": "MIT",
   "configSchema": {
@@ -51,11 +51,11 @@
       "security": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["challenge", "apiKey", "allowedCallerNumbers"],
+        "required": ["apiKey", "allowedCallerNumbers"],
         "properties": {
           "challenge": {
             "type": "string",
-            "description": "Secret passphrase for inbound call authentication (no default - must be set)"
+            "description": "Deprecated: inbound passphrase challenge no longer used"
           },
           "apiKey": {
             "type": "string",

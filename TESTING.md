@@ -224,7 +224,7 @@ echo "$TRANSCRIPT" | grep -q "Assistant:" && echo "✓ Assistant responses logge
 **Steps:**
 1. Edit prompt file:
    ```bash
-   vim ~/.openclaw/extensions/advanced-voice/prompts/jarvis-outbound.txt
+   vim ~/.openclaw/extensions/advanced-voice/prompts/outbound.txt
    # Change greeting to: "Greetings Ramon, Jarvis here."
    ```
 

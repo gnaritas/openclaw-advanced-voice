@@ -3,7 +3,7 @@
  *
  * Advanced voice calling system with:
  * - System 1 (OpenAI Realtime) + System 2 (OpenClaw backend) architecture
- * - Passphrase security challenge for inbound calls
+ * - Caller-number allowlist for inbound calls
  * - Full transcript logging to memory/
  * - Externalized prompts in files
  * - Unified Mind narrative bridge
@@ -40,8 +40,8 @@ function advancedVoicePlugin(config = {}) {
     provider: resolvedConfig.provider ?? 'twilio',
     twilio: resolvedConfig.twilio ?? {},
     openai: resolvedConfig.openai ?? {},
-    security: resolvedConfig.security ?? {
-      challenge: resolvedConfig.security?.challenge || process.env.SECURITY_CHALLENGE,
+        security: resolvedConfig.security ?? {
+          challenge: resolvedConfig.security?.challenge || process.env.SECURITY_CHALLENGE,
       apiKey: resolvedConfig.apiKey || process.env.VOICE_API_KEY,
       allowedCallerNumbers: resolvedConfig.security?.allowedCallerNumbers || []
     },
@@ -50,8 +50,8 @@ function advancedVoicePlugin(config = {}) {
       memoryPath: '~/clawd/memory'
     },
     prompts: resolvedConfig.prompts ?? {
-      inbound: join(__dirname, 'prompts/jarvis-base.txt'),
-      outbound: join(__dirname, 'prompts/jarvis-outbound.txt')
+      inbound: join(__dirname, 'prompts/inbound.txt'),
+      outbound: join(__dirname, 'prompts/outbound.txt')
     }
   };
 
@@ -276,11 +276,11 @@ function advancedVoicePlugin(config = {}) {
         },
         security: {
           type: 'object',
-          required: ['challenge', 'apiKey', 'allowedCallerNumbers'],
+          required: ['apiKey', 'allowedCallerNumbers'],
           properties: {
             challenge: { 
               type: 'string',
-              description: 'Secret passphrase for inbound call authentication (required - no default)'
+              description: 'Deprecated: inbound passphrase challenge no longer used'
             },
             apiKey: { type: 'string' },
             allowedCallerNumbers: {

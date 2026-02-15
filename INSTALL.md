@@ -18,8 +18,8 @@ Plugin is already scaffolded at:
 ├── server.py              # Voice server (FastAPI)
 ├── jarvis_integration.py  # System 2 bridge
 ├── prompts/               # Externalized prompts
-│   ├── jarvis-base.txt    # Inbound (troll → Jarvis)
-│   └── jarvis-outbound.txt # Outbound (friendly assistant)
+│   ├── inbound.txt        # Inbound behavior
+│   └── outbound.txt       # Outbound mission behavior
 ├── package.json
 ├── requirements.txt       # Python deps
 ├── README.md

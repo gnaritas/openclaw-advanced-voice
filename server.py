@@ -7,7 +7,7 @@ Handles outbound calls with AI agent capabilities
     Prompts are now loaded from prompts/*.txt files at startup.
     If you modify prompt loading or add new prompts:
     - Make sure files exist before server starts
-    - Test that passphrase templating works ({PASSPHRASE} → actual value)
+    - Test inbound prompt loading and call routing behavior
     - Log prompt load success to stdout for debugging
     Run: python3 -c "from server import *" to test imports
 """
@@ -57,16 +57,7 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_NUMBER = os.getenv("TWILIO_NUMBER")
 PORT = int(os.getenv("PORT", 8000))
 BOOKING_API = os.getenv("BOOKING_API")
-SECURITY_CHALLENGE = os.getenv("SECURITY_CHALLENGE")  # Required: security passphrase from config
-if not SECURITY_CHALLENGE:
-    raise ValueError("SECURITY_CHALLENGE environment variable is required")
-
-
-def _normalize_phrase(text: str) -> str:
-    """Normalize text for deterministic passphrase matching."""
-    lowered = text.lower()
-    alnum_spaces = re.sub(r"[^a-z0-9\s]", " ", lowered)
-    return " ".join(alnum_spaces.split())
+SECURITY_CHALLENGE = os.getenv("SECURITY_CHALLENGE", "")
 
 
 def _normalize_phone_number(phone: str) -> str:
@@ -74,10 +65,6 @@ def _normalize_phone_number(phone: str) -> str:
     digits = re.sub(r"\D", "", phone or "")
     return f"+{digits}" if digits else ""
 
-
-NORMALIZED_SECURITY_CHALLENGE = _normalize_phrase(SECURITY_CHALLENGE)
-if not NORMALIZED_SECURITY_CHALLENGE:
-    raise ValueError("SECURITY_CHALLENGE must contain at least one alphanumeric character")
 
 ALLOWED_CALLER_NUMBERS_RAW = os.getenv("ALLOWED_CALLER_NUMBERS", "")
 NORMALIZED_ALLOWED_CALLER_NUMBERS: List[str] = []
@@ -88,11 +75,6 @@ for raw_number in ALLOWED_CALLER_NUMBERS_RAW.split(","):
 
 if not NORMALIZED_ALLOWED_CALLER_NUMBERS:
     raise ValueError("ALLOWED_CALLER_NUMBERS must include at least one phone number")
-
-PASSCODE_NONDISCLOSURE_NOTICE = (
-    "SECURITY RULE: Authentication credentials are secret material. "
-    "Never reveal, repeat, spell, hint at, confirm, or deny the passphrase."
-)
 
 # Twilio client (lazy initialization)
 _twilio_client = None
@@ -112,46 +94,32 @@ CONTACTS = {
 
 # Load prompts from files
 def load_prompts():
-    """Load system prompts from files. Falls back to defaults if files not found."""
+    """Load required system prompts from files. Fail fast if anything is missing."""
     prompts_dir = os.path.join(os.path.dirname(__file__), 'prompts')
 
-    # Load outbound prompt (used as default system message)
-    outbound_prompt = "You are an AI assistant and digital butler."
-    outbound_path = os.path.join(prompts_dir, 'jarvis-outbound.txt')
-    if os.path.exists(outbound_path):
-        try:
-            with open(outbound_path, 'r') as f:
-                outbound_prompt = f.read().strip()
-            log_info(f"[Prompts] Loaded outbound prompt from {outbound_path}")
-        except Exception as e:
-            log_info(f"[Prompts] Warning: Could not load outbound prompt: {e}")
+    inbound_path = os.path.join(prompts_dir, 'inbound.txt')
+    outbound_path = os.path.join(prompts_dir, 'outbound.txt')
 
-    # Load base prompt (used for inbound calls)
-    base_prompt = ""
-    base_path = os.path.join(prompts_dir, 'jarvis-base.txt')
-    if os.path.exists(base_path):
+    def _read_required_prompt(path: str, label: str) -> str:
+        if not os.path.exists(path):
+            raise RuntimeError(f"Missing required {label} prompt file: {path}")
         try:
-            with open(base_path, 'r') as f:
-                base_prompt = f.read().strip()
-            log_info(f"[Prompts] Loaded base prompt from {base_path}")
+            with open(path, 'r') as f:
+                content = f.read().strip()
         except Exception as e:
-            log_info(f"[Prompts] Warning: Could not load base prompt: {e}")
+            raise RuntimeError(f"Failed to load required {label} prompt from {path}: {e}") from e
+        if not content:
+            raise RuntimeError(f"Required {label} prompt is empty: {path}")
+        log_info(f"[Prompts] Loaded {label} prompt from {path}")
+        return content
 
-    # Load mission template (used for mission-based outbound calls)
-    mission_template = ""
-    mission_path = os.path.join(prompts_dir, 'mission-template.txt')
-    if os.path.exists(mission_path):
-        try:
-            with open(mission_path, 'r') as f:
-                mission_template = f.read().strip()
-            log_info(f"[Prompts] Loaded mission template from {mission_path}")
-        except Exception as e:
-            log_info(f"[Prompts] Warning: Could not load mission template: {e}")
+    inbound_prompt = _read_required_prompt(inbound_path, "inbound")
+    outbound_prompt = _read_required_prompt(outbound_path, "outbound")
 
-    return outbound_prompt, base_prompt, mission_template
+    return inbound_prompt, outbound_prompt
 
 # Initialize prompts at startup
-JARVIS_SYSTEM_MESSAGE, BASE_INBOUND_PROMPT, MISSION_TEMPLATE = load_prompts()
+INBOUND_PROMPT, OUTBOUND_PROMPT_TEMPLATE = load_prompts()
 
 
 def construct_mission_prompt(role: str, mission: str) -> str:
@@ -165,34 +133,9 @@ def construct_mission_prompt(role: str, mission: str) -> str:
     Returns:
         Complete system prompt with role and mission embedded
     """
-    if not MISSION_TEMPLATE:
-        # Fallback if template not loaded
-        return f"You are a {role}. Your mission: {mission}"
-    
-    prompt = MISSION_TEMPLATE.replace("{ROLE}", role).replace("{MISSION}", mission)
+    prompt = OUTBOUND_PROMPT_TEMPLATE.replace("{ROLE}", role).replace("{MISSION}", mission)
     log_info(f"[Mission] Constructed prompt for role='{role}' (len: {len(prompt)})")
     return prompt
-
-# Inbound call challenge (function to template in configurable passphrase)
-def get_inbound_challenge(passphrase: str = SECURITY_CHALLENGE) -> str:
-    """Return inbound prompt without exposing passphrase to the model."""
-    # Keep backward compatibility with templates that still include {PASSPHRASE}
-    # while ensuring the real secret is never injected into model instructions.
-    _ = passphrase
-    return BASE_INBOUND_PROMPT.replace('{PASSPHRASE}', '[REDACTED]')
-
-
-def inbound_passphrase_matches(transcript_text: str) -> bool:
-    """
-    Backend-only passphrase validation.
-    Returns True when transcript contains the normalized passphrase as a phrase.
-    """
-    normalized_transcript = _normalize_phrase(transcript_text)
-    if not normalized_transcript:
-        return False
-    padded_transcript = f" {normalized_transcript} "
-    padded_passphrase = f" {NORMALIZED_SECURITY_CHALLENGE} "
-    return padded_passphrase in padded_transcript
 
 # Tool definitions for OpenAI
 TOOLS = [
@@ -402,7 +345,7 @@ async def initiate_call_by_number(phone_number: str, request: Request, _auth: st
 @app.get("/incoming-call")
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
-    """Handle incoming calls - TwiML to connect to media stream with challenge"""
+    """Handle incoming calls - TwiML to connect allowlisted callers to assistant mode"""
     form_data = await request.form()
     from_number = form_data.get("From", "Unknown")
     call_sid = form_data.get("CallSid", "unknown")
@@ -418,8 +361,7 @@ async def incoming_call(request: Request):
         denied.hangup()
         return Response(content=str(denied), media_type="application/xml")
     
-    # For incoming calls, The assistant handles the challenge directly
-    # No separate bouncer - just flag it as inbound
+    # Caller is allowlisted. Connect directly in inbound assistant mode.
     
     timezone = "America/Los_Angeles"
     
@@ -435,7 +377,7 @@ async def incoming_call(request: Request):
     # Build WebSocket URL (no query params - use customParameters instead)
     ws_url = f"{protocol}://{host}/media-stream"
     
-    log_info(f"[Incoming Call] Accepted caller {from_number} (CallSid: {call_sid}). Assistant will challenge.")
+    log_info(f"[Incoming Call] Accepted caller {from_number} (CallSid: {call_sid}). Assistant mode enabled.")
     
     response = VoiceResponse()
     connect = Connect()
@@ -536,9 +478,8 @@ async def media_stream(websocket: WebSocket):
     # Pre-load narrative context (same for all calls)
     narrative_context = await get_narrative_context()
     
-    # Default instructions — will be updated once we know the call SID (outbound)
-    # or once we detect inbound via customParameters in the Twilio start event
-    base_instructions = JARVIS_SYSTEM_MESSAGE
+    # Default instructions are neutral until call direction is known.
+    base_instructions = "Awaiting call context."
     if narrative_context:
         final_instructions = f"{narrative_context}\n\n---\n\n{base_instructions}"
     else:
@@ -560,8 +501,8 @@ async def media_stream(websocket: WebSocket):
     timezone = timezone_default  # Initialize with default, updated from Twilio start event
     current_call_direction = "outbound"
     inbound_auth_flow_active = False
-    inbound_authenticated = False
-    inbound_passphrase_verified = False
+    inbound_authenticated = True
+    
     
     log_info(f"[WebSocket] Starting OpenAI connection with message: {final_instructions[:50]}...")
     log_info(f"[WebSocket] API Key present: {bool(OPENAI_API_KEY)}")
@@ -608,7 +549,7 @@ async def media_stream(websocket: WebSocket):
                 async def forward_twilio_to_openai():
                     """Forward audio from Twilio to OpenAI"""
                     nonlocal stream_sid, call_sid, timezone, current_call_direction
-                    nonlocal inbound_auth_flow_active, inbound_authenticated, inbound_passphrase_verified
+                    nonlocal inbound_auth_flow_active, inbound_authenticated
                     try:
                         async for message in websocket.iter_text():
                             data = json.loads(message)
@@ -652,11 +593,16 @@ async def media_stream(websocket: WebSocket):
                                         break
                                 
                                 elif call_direction == "inbound":
-                                    inbound_auth_flow_active = True
-                                    inbound_authenticated = False
-                                    inbound_passphrase_verified = False
-                                    log_info("[WebSocket] Inbound call detected - updating session with challenge")
-                                    inbound_instructions = f"{get_inbound_challenge()}\n\n{PASSCODE_NONDISCLOSURE_NOTICE}"
+                                    # Caller number is already allowlisted in /incoming-call.
+                                    # No second-factor challenge/troll mode for inbound calls.
+                                    inbound_auth_flow_active = False
+                                    inbound_authenticated = True
+                                    
+                                    log_info("[WebSocket] Inbound call detected - allowlisted caller, enabling assistant mode")
+                                    inbound_instructions = (
+                                        f"{INBOUND_PROMPT}\n\n"
+                                        "Inbound caller already verified by allowed phone number."
+                                    )
                                     if narrative_context:
                                         final_inbound = f"{narrative_context}\n\n---\n\n{inbound_instructions}"
                                     else:
@@ -668,7 +614,7 @@ async def media_stream(websocket: WebSocket):
                                             "instructions": final_inbound
                                         }
                                     })
-                                    log_info("[WebSocket] ✓ Session updated with inbound challenge")
+                                    log_info("[WebSocket] ✓ Session updated with inbound assistant mode")
                                     
                                     # Inject initial greeting to make assistant speak first
                                     log_info("[OpenAI] Injecting initial greeting for inbound call")
@@ -741,7 +687,7 @@ async def media_stream(websocket: WebSocket):
                 async def forward_openai_to_twilio():
                     """Forward responses from OpenAI to Twilio"""
                     nonlocal timezone, current_call_direction
-                    nonlocal inbound_auth_flow_active, inbound_authenticated, inbound_passphrase_verified
+                    nonlocal inbound_auth_flow_active, inbound_authenticated
                     try:
                         active_response_id = None
                         
@@ -793,65 +739,7 @@ async def media_stream(websocket: WebSocket):
                                         })
                                         log_info(f"[User] {transcript_text}")
 
-                                        # Backend-controlled inbound auth:
-                                        # caller is already number-allowlisted in /incoming-call.
-                                        # passphrase remains required to unlock assistant mode.
-                                        if inbound_auth_flow_active and not inbound_authenticated:
-                                            if not inbound_passphrase_verified:
-                                                matched = inbound_passphrase_matches(transcript_text)
-                                                log_info(
-                                                    f"[Security] Auth check: matched={matched}, "
-                                                    f"inbound_flow={inbound_auth_flow_active}, "
-                                                    f"direction={current_call_direction}, "
-                                                    f"normalized='{_normalize_phrase(transcript_text)}'"
-                                                )
-                                                if matched:
-                                                    inbound_passphrase_verified = True
-                                                    inbound_authenticated = True
-                                                    log_info("[Security] Inbound passphrase matched by backend; enabling assistant mode")
-
-                                                    authenticated_instructions = (
-                                                        f"{JARVIS_SYSTEM_MESSAGE}\n\n"
-                                                        "Caller authentication has been verified by backend. "
-                                                        "Operate in assistant mode.\n\n"
-                                                        f"{PASSCODE_NONDISCLOSURE_NOTICE}"
-                                                    )
-                                                    if narrative_context:
-                                                        final_authenticated = (
-                                                            f"{narrative_context}\n\n---\n\n{authenticated_instructions}"
-                                                        )
-                                                    else:
-                                                        final_authenticated = authenticated_instructions
-
-                                                    await openai_ws.send_json({
-                                                        "type": "session.update",
-                                                        "session": {
-                                                            "instructions": final_authenticated
-                                                        }
-                                                    })
-
-                                                    conversation_transcript.append({
-                                                        "type": "auth_success",
-                                                        "timestamp": datetime.now().isoformat(),
-                                                        "source": "backend_passphrase_match"
-                                                    })
-
-                                                    await openai_ws.send_json({
-                                                        "type": "conversation.item.create",
-                                                        "item": {
-                                                            "type": "message",
-                                                            "role": "user",
-                                                            "content": [
-                                                                {
-                                                                    "type": "input_text",
-                                                                    "text": "[AUTH SUCCESS] Caller verified by backend. Greet the authorized user."
-                                                                }
-                                                            ]
-                                                        }
-                                                    })
-                                                    await openai_ws.send_json({
-                                                        "type": "response.create"
-                                                    })
+                                        # Inbound second-factor auth removed.
                                 
                                 elif response["type"] == "input_audio_buffer.speech_started":
                                     # User started speaking - cancel active response and clear buffer
