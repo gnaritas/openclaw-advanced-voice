@@ -690,6 +690,37 @@ async def media_stream(websocket: WebSocket):
                     nonlocal inbound_auth_flow_active, inbound_authenticated
                     try:
                         active_response_id = None
+                        user_speaking_event = asyncio.Event()
+                        pending_tool_outputs: List[Dict[str, Any]] = []
+                        pending_tool_lock = asyncio.Lock()
+                        tool_calls_being_built = set()
+
+                        async def flush_pending_tool_outputs():
+                            """Deliver queued tool outputs once caller finishes speaking."""
+                            if user_speaking_event.is_set():
+                                return
+
+                            async with pending_tool_lock:
+                                if not pending_tool_outputs:
+                                    return
+                                queued = pending_tool_outputs[:]
+                                pending_tool_outputs.clear()
+
+                            log_info(f"[Tool Output] Flushing {len(queued)} queued function_call_output item(s)")
+                            for item in queued:
+                                await openai_ws.send_json({
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "function_call_output",
+                                        "call_id": item["call_id"],
+                                        "output": item["output"]
+                                    }
+                                })
+
+                            await openai_ws.send_json({
+                                "type": "response.create"
+                            })
+                            log_info("[Tool Output] response.create triggered after queued flush")
                         
                         async for msg in openai_ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
@@ -717,6 +748,7 @@ async def media_stream(websocket: WebSocket):
                                                     })
                                     
                                     active_response_id = None
+                                    await flush_pending_tool_outputs()
                                 
                                 elif response["type"] == "response.audio.delta":
                                     # Forward audio back to Twilio
@@ -743,26 +775,50 @@ async def media_stream(websocket: WebSocket):
                                 
                                 elif response["type"] == "input_audio_buffer.speech_started":
                                     # User started speaking - cancel active response and clear buffer
+                                    user_speaking_event.set()
                                     log_info("[VAD] User interrupted - canceling response and clearing buffer")
                                     
-                                    # Cancel the active OpenAI response
+                                    # Cancel active model speech unless a tool call is actively being formed.
+                                    # This keeps barge-in snappy while preserving in-progress backend dispatch.
                                     if active_response_id:
-                                        await openai_ws.send_json({
-                                            "type": "response.cancel",
-                                            "response_id": active_response_id
-                                        })
-                                        active_response_id = None
+                                        if tool_calls_being_built:
+                                            log_info("[VAD] Skipping response.cancel: function call arguments in progress")
+                                        else:
+                                            await asyncio.sleep(0.15)
+                                            if tool_calls_being_built:
+                                                log_info("[VAD] response.cancel deferred: function call arguments started during debounce")
+                                            else:
+                                                await openai_ws.send_json({
+                                                    "type": "response.cancel",
+                                                    "response_id": active_response_id
+                                                })
+                                                active_response_id = None
                                     
                                     # Clear Twilio audio buffer
                                     await websocket.send_json({
                                         "event": "clear",
                                         "streamSid": stream_sid
                                     })
+
+                                elif response["type"] == "input_audio_buffer.speech_stopped":
+                                    user_speaking_event.clear()
+                                    await flush_pending_tool_outputs()
+
+                                elif response["type"] == "response.output_item.added":
+                                    item = response.get("item", {})
+                                    if item.get("type") == "function_call":
+                                        call_id = item.get("call_id") or item.get("id")
+                                        if call_id:
+                                            tool_calls_being_built.add(call_id)
+                                            log_info(f"[Tool Call] Building arguments for call_id={call_id}")
                                 
                                 elif response["type"] == "response.function_call_arguments.done":
                                     # Handle tool calls via backend
-                                    # Await synchronously to ensure results flow back to the model before next turn
                                     try:
+                                        call_id = response.get("call_id")
+                                        if call_id and call_id in tool_calls_being_built:
+                                            tool_calls_being_built.remove(call_id)
+
                                         # Use create_task for the tool call to keep the socket read loop moving,
                                         # preventing the connection from stalling while waiting for System 2.
                                         asyncio.create_task(handle_tool_call(
@@ -771,7 +827,10 @@ async def media_stream(websocket: WebSocket):
                                             websocket, 
                                             timezone,
                                             conversation_transcript,
-                                            call_sid
+                                            call_sid,
+                                            user_speaking_event,
+                                            pending_tool_outputs,
+                                            pending_tool_lock,
                                         ))
                                     except Exception as e:
                                         log_info(f"[WebSocket ERROR] handle_tool_call dispatch exception: {e}")
@@ -806,7 +865,10 @@ async def handle_tool_call(
     twilio_ws, 
     timezone, 
     conversation_transcript: List[Dict[str, Any]],
-    call_sid: str
+    call_sid: str,
+    user_speaking_event: asyncio.Event,
+    pending_tool_outputs: List[Dict[str, Any]],
+    pending_tool_lock: asyncio.Lock,
 ):
     """Handle tool function calls by routing through backend"""
     call_id = response.get("call_id")
@@ -982,19 +1044,8 @@ async def handle_tool_call(
                 "status": "failed"
             }
     
-    # Send result back to OpenAI
+    # Send result back to OpenAI (or queue while caller is speaking)
     if result:
-        log_info(f"[Tool Output] Sending result to OpenAI: {json.dumps(result)[:200]}")
-        await openai_ws.send_json({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": json.dumps(result)
-            }
-        })
-        log_info(f"[Tool Output] Sent function_call_output to OpenAI")
-        
         # Log result to transcript
         conversation_transcript.append({
             "type": "tool_result",
@@ -1003,12 +1054,32 @@ async def handle_tool_call(
             "result": result
         })
 
-        # Explicitly trigger a response generation after tool output
-        log_info(f"[Tool Output] Triggering response.create")
-        await openai_ws.send_json({
-            "type": "response.create"
-        })
-        log_info(f"[Tool Output] Response generation triggered")
+        if user_speaking_event.is_set():
+            # Keep tool execution independent from barge-in: deliver on next turn.
+            async with pending_tool_lock:
+                pending_tool_outputs.append({
+                    "call_id": call_id,
+                    "output": json.dumps(result)
+                })
+            log_info(f"[Tool Output] Queued function_call_output while user speaking (call_id={call_id})")
+        else:
+            log_info(f"[Tool Output] Sending result to OpenAI: {json.dumps(result)[:200]}")
+            await openai_ws.send_json({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(result)
+                }
+            })
+            log_info(f"[Tool Output] Sent function_call_output to OpenAI")
+            
+            # Explicitly trigger a response generation after tool output
+            log_info(f"[Tool Output] Triggering response.create")
+            await openai_ws.send_json({
+                "type": "response.create"
+            })
+            log_info(f"[Tool Output] Response generation triggered")
     else:
         log_info(f"[Tool Output ERROR] No result to send back!")
 
