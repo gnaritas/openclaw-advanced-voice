@@ -18,11 +18,37 @@ from datetime import datetime
 
 # Gateway API config (all secrets from environment — never hardcode)
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:18789/v1/chat/completions")
-GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
 VOICE_API_KEY = os.getenv("VOICE_API_KEY", "")
 
 # Narrative bridge
 NARRATIVE_SCRIPT = os.path.expanduser("~/clawd/bin/narrative")
+
+
+def get_gateway_token() -> str:
+    """
+    Resolve gateway token with config-first precedence.
+
+    Gateway auth is configured in ~/.openclaw/openclaw.json. LaunchAgent
+    environment can lag behind token rotations, so prefer config token.
+    """
+    env_token = os.getenv("GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_TOKEN", "")
+    config_token = ""
+    config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+            config_token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
+    except Exception as e:
+        print(f"[Brain WARN] Failed to read gateway token from config: {e}")
+
+    if config_token:
+        if env_token and env_token != config_token:
+            print("[Brain WARN] Env gateway token differs from config; using config token")
+        return config_token
+
+    return env_token
 
 
 async def get_narrative_context() -> str:
@@ -85,11 +111,15 @@ Question from Ramon: {question}
         payload["user"] = session_key
     
     try:
+        gateway_token = get_gateway_token()
+        if not gateway_token:
+            return {"success": False, "error": "Gateway token missing"}
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 GATEWAY_URL,
                 headers={
-                    "Authorization": f"Bearer {GATEWAY_TOKEN}",
+                    "Authorization": f"Bearer {gateway_token}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
@@ -336,12 +366,21 @@ async def report_mission_result(
             if next_steps:
                 notification += f"\n- Next: {next_steps}"
             
+            gateway_token = get_gateway_token()
+            if not gateway_token:
+                print("[Mission] Failed to notify main session: missing gateway token")
+                return {
+                    "success": True,
+                    "report_id": report_id,
+                    "file": memory_file
+                }
+
             async with aiohttp.ClientSession() as session:
                 # Send as a low-priority notification to the main session
                 async with session.post(
                     GATEWAY_URL,
                     headers={
-                        "Authorization": f"Bearer {GATEWAY_TOKEN}",
+                        "Authorization": f"Bearer {gateway_token}",
                         "Content-Type": "application/json",
                     },
                     json={
