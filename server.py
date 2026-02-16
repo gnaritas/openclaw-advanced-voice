@@ -692,22 +692,27 @@ async def media_stream(websocket: WebSocket):
                         active_response_id = None
                         user_speaking_event = asyncio.Event()
                         pending_tool_outputs: List[Dict[str, Any]] = []
+                        inflight_tool_outputs: List[Dict[str, Any]] = []
                         pending_tool_lock = asyncio.Lock()
                         tool_calls_being_built = set()
+                        tool_delivery_in_progress = False
 
                         async def flush_pending_tool_outputs():
                             """Deliver queued tool outputs once caller finishes speaking."""
+                            nonlocal tool_delivery_in_progress
                             if user_speaking_event.is_set():
                                 return
 
                             async with pending_tool_lock:
                                 if not pending_tool_outputs:
                                     return
-                                queued = pending_tool_outputs[:]
+                                if inflight_tool_outputs:
+                                    return
+                                inflight_tool_outputs.extend(pending_tool_outputs)
                                 pending_tool_outputs.clear()
 
-                            log_info(f"[Tool Output] Flushing {len(queued)} queued function_call_output item(s)")
-                            for item in queued:
+                            log_info(f"[Tool Output] Flushing {len(inflight_tool_outputs)} queued function_call_output item(s)")
+                            for item in inflight_tool_outputs:
                                 await openai_ws.send_json({
                                     "type": "conversation.item.create",
                                     "item": {
@@ -717,9 +722,33 @@ async def media_stream(websocket: WebSocket):
                                     }
                                 })
 
+                            # Pin the next assistant turn to pending results first so
+                            # stacked questions are less likely to eclipse finished answers.
+                            summaries = "\n".join(
+                                f"- {item.get('summary', '')}" for item in inflight_tool_outputs
+                            )
+                            await openai_ws.send_json({
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": (
+                                                "[SYSTEM NOTE] Deliver the pending tool results first, "
+                                                "succinctly, before handling new requests.\n"
+                                                f"{summaries}"
+                                            ),
+                                        }
+                                    ],
+                                },
+                            })
+
                             await openai_ws.send_json({
                                 "type": "response.create"
                             })
+                            tool_delivery_in_progress = True
                             log_info("[Tool Output] response.create triggered after queued flush")
                         
                         async for msg in openai_ws:
@@ -736,17 +765,31 @@ async def media_stream(websocket: WebSocket):
                                     
                                     # Log assistant response to transcript
                                     output = response.get("response", {}).get("output", [])
+                                    assistant_text_present = False
                                     for item in output:
                                         if item.get("type") == "message":
                                             content = item.get("content", [])
                                             for c in content:
                                                 if c.get("type") == "text":
+                                                    assistant_text_present = True
                                                     conversation_transcript.append({
                                                         "type": "assistant_message",
                                                         "timestamp": datetime.now().isoformat(),
                                                         "text": c.get("text", "")
                                                     })
                                     
+                                    # If the response carrying pending tool results was interrupted,
+                                    # re-queue them so they are not lost.
+                                    if tool_delivery_in_progress:
+                                        if assistant_text_present:
+                                            inflight_tool_outputs.clear()
+                                        else:
+                                            async with pending_tool_lock:
+                                                pending_tool_outputs[:0] = inflight_tool_outputs
+                                            inflight_tool_outputs.clear()
+                                            log_info("[Tool Output] Re-queued undelivered tool outputs after interrupted response")
+                                        tool_delivery_in_progress = False
+
                                     active_response_id = None
                                     await flush_pending_tool_outputs()
                                 
@@ -831,6 +874,7 @@ async def media_stream(websocket: WebSocket):
                                             user_speaking_event,
                                             pending_tool_outputs,
                                             pending_tool_lock,
+                                            flush_pending_tool_outputs,
                                         ))
                                     except Exception as e:
                                         log_info(f"[WebSocket ERROR] handle_tool_call dispatch exception: {e}")
@@ -869,6 +913,7 @@ async def handle_tool_call(
     user_speaking_event: asyncio.Event,
     pending_tool_outputs: List[Dict[str, Any]],
     pending_tool_lock: asyncio.Lock,
+    flush_pending_tool_outputs_cb,
 ):
     """Handle tool function calls by routing through backend"""
     call_id = response.get("call_id")
@@ -1044,7 +1089,8 @@ async def handle_tool_call(
                 "status": "failed"
             }
     
-    # Send result back to OpenAI (or queue while caller is speaking)
+    # Queue result for managed delivery. This avoids losing answers when barge-in
+    # interrupts speech after function_call_output has already been sent.
     if result:
         # Log result to transcript
         conversation_transcript.append({
@@ -1054,32 +1100,19 @@ async def handle_tool_call(
             "result": result
         })
 
-        if user_speaking_event.is_set():
-            # Keep tool execution independent from barge-in: deliver on next turn.
-            async with pending_tool_lock:
-                pending_tool_outputs.append({
-                    "call_id": call_id,
-                    "output": json.dumps(result)
-                })
-            log_info(f"[Tool Output] Queued function_call_output while user speaking (call_id={call_id})")
-        else:
-            log_info(f"[Tool Output] Sending result to OpenAI: {json.dumps(result)[:200]}")
-            await openai_ws.send_json({
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps(result)
-                }
+        summary = json.dumps(result)[:220]
+        async with pending_tool_lock:
+            pending_tool_outputs.append({
+                "call_id": call_id,
+                "output": json.dumps(result),
+                "summary": summary,
             })
-            log_info(f"[Tool Output] Sent function_call_output to OpenAI")
-            
-            # Explicitly trigger a response generation after tool output
-            log_info(f"[Tool Output] Triggering response.create")
-            await openai_ws.send_json({
-                "type": "response.create"
-            })
-            log_info(f"[Tool Output] Response generation triggered")
+
+        log_info(f"[Tool Output] Queued function_call_output (call_id={call_id})")
+
+        # If the caller is not currently speaking, try delivering immediately.
+        if not user_speaking_event.is_set():
+            await flush_pending_tool_outputs_cb()
     else:
         log_info(f"[Tool Output ERROR] No result to send back!")
 
