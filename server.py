@@ -690,6 +690,7 @@ async def media_stream(websocket: WebSocket):
                     nonlocal inbound_auth_flow_active, inbound_authenticated
                     try:
                         active_response_id = None
+                        cancel_requested_response_id = None
                         user_speaking_event = asyncio.Event()
                         pending_tool_outputs: List[Dict[str, Any]] = []
                         inflight_tool_outputs: List[Dict[str, Any]] = []
@@ -700,7 +701,7 @@ async def media_stream(websocket: WebSocket):
                         async def flush_pending_tool_outputs():
                             """Deliver queued tool outputs once caller finishes speaking."""
                             nonlocal tool_delivery_in_progress
-                            if user_speaking_event.is_set():
+                            if user_speaking_event.is_set() or active_response_id or tool_delivery_in_progress:
                                 return
 
                             async with pending_tool_lock:
@@ -722,29 +723,6 @@ async def media_stream(websocket: WebSocket):
                                     }
                                 })
 
-                            # Pin the next assistant turn to pending results first so
-                            # stacked questions are less likely to eclipse finished answers.
-                            summaries = "\n".join(
-                                f"- {item.get('summary', '')}" for item in inflight_tool_outputs
-                            )
-                            await openai_ws.send_json({
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "message",
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "input_text",
-                                            "text": (
-                                                "[SYSTEM NOTE] Deliver the pending tool results first, "
-                                                "succinctly, before handling new requests.\n"
-                                                f"{summaries}"
-                                            ),
-                                        }
-                                    ],
-                                },
-                            })
-
                             await openai_ws.send_json({
                                 "type": "response.create"
                             })
@@ -758,39 +736,34 @@ async def media_stream(websocket: WebSocket):
                                 # Track active response for cancellation
                                 if response["type"] == "response.created":
                                     active_response_id = response.get("response", {}).get("id")
+                                    cancel_requested_response_id = None
                                     log_info(f"[Response] Started: {active_response_id}")
                                 
                                 elif response["type"] == "response.done":
                                     log_info(f"[Response] Completed: {active_response_id}")
                                     
                                     # Log assistant response to transcript
-                                    output = response.get("response", {}).get("output", [])
-                                    assistant_text_present = False
+                                    response_body = response.get("response", {})
+                                    output = response_body.get("output", [])
                                     for item in output:
                                         if item.get("type") == "message":
                                             content = item.get("content", [])
                                             for c in content:
                                                 if c.get("type") == "text":
-                                                    assistant_text_present = True
                                                     conversation_transcript.append({
                                                         "type": "assistant_message",
                                                         "timestamp": datetime.now().isoformat(),
                                                         "text": c.get("text", "")
                                                     })
                                     
-                                    # If the response carrying pending tool results was interrupted,
-                                    # re-queue them so they are not lost.
+                                    # Complete one delivery cycle per response to avoid replay loops.
+                                    # Keep behavior stable: new tool outputs can be queued for later turns.
                                     if tool_delivery_in_progress:
-                                        if assistant_text_present:
-                                            inflight_tool_outputs.clear()
-                                        else:
-                                            async with pending_tool_lock:
-                                                pending_tool_outputs[:0] = inflight_tool_outputs
-                                            inflight_tool_outputs.clear()
-                                            log_info("[Tool Output] Re-queued undelivered tool outputs after interrupted response")
+                                        inflight_tool_outputs.clear()
                                         tool_delivery_in_progress = False
 
                                     active_response_id = None
+                                    cancel_requested_response_id = None
                                     await flush_pending_tool_outputs()
                                 
                                 elif response["type"] == "response.audio.delta":
@@ -831,11 +804,12 @@ async def media_stream(websocket: WebSocket):
                                             if tool_calls_being_built:
                                                 log_info("[VAD] response.cancel deferred: function call arguments started during debounce")
                                             else:
-                                                await openai_ws.send_json({
-                                                    "type": "response.cancel",
-                                                    "response_id": active_response_id
-                                                })
-                                                active_response_id = None
+                                                if cancel_requested_response_id != active_response_id:
+                                                    await openai_ws.send_json({
+                                                        "type": "response.cancel",
+                                                        "response_id": active_response_id
+                                                    })
+                                                    cancel_requested_response_id = active_response_id
                                     
                                     # Clear Twilio audio buffer
                                     await websocket.send_json({
@@ -1100,12 +1074,10 @@ async def handle_tool_call(
             "result": result
         })
 
-        summary = json.dumps(result)[:220]
         async with pending_tool_lock:
             pending_tool_outputs.append({
                 "call_id": call_id,
                 "output": json.dumps(result),
-                "summary": summary,
             })
 
         log_info(f"[Tool Output] Queued function_call_output (call_id={call_id})")
